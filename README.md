@@ -1,4 +1,4 @@
-# Construct IV — Construction Visual Intelligence
+# Capture IV — Construction Visual Intelligence
 
 A Flask portal for securely browsing construction drone footage and project documents. It includes admin-managed accounts, protected media access, flight metadata, tags, audit logging, and a small authenticated JSON API.
 

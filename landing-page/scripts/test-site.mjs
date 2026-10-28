@@ -6,7 +6,7 @@ const {default:site}=await import('data:text/javascript;base64,'+Buffer.from(sou
 for(const route of ['/','/platform','/solutions','/clients','/about','/contact','/pricing']){
  const response=await site.fetch(new Request('https://construct.test'+route),{});
  assert.equal(response.status,200,route);const html=await response.text();
- assert.match(html,/Construct IV/);assert.doesNotMatch(html,/>[^<]*SKYBUILT/i);
+ assert.match(html,/Capture IV/);assert.doesNotMatch(html,/>[^<]*SKYBUILT/i);
  assert.match(html,/support@constructiv.com/);assert.doesNotMatch(html,/Illustrative photography:/);
  for(const link of html.matchAll(/href="(\/[^"]*)"/g)){
   const target=await site.fetch(new Request(new URL(link[1],'https://construct.test')),{});
@@ -14,7 +14,7 @@ for(const route of ['/','/platform','/solutions','/clients','/about','/contact',
  }
 }
 assert.equal((await site.fetch(new Request('https://construct.test/missing'),{})).status,404);
-const values={firstName:'Quality',lastName:'Check',email:'qa@example.invalid',company:'Construct IV QA',inquiryType:'General Inquiry',message:'Synthetic local test inquiry; no email is sent.',website:''};
+const values={firstName:'Quality',lastName:'Check',email:'qa@example.invalid',company:'Capture IV QA',inquiryType:'General Inquiry',message:'Synthetic local test inquiry; no email is sent.',website:''};
 const req=(body=values,origin='https://construct.test')=>new Request('https://construct.test/api/contact',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,'CF-Connecting-IP':'192.0.2.10'},body:JSON.stringify(body)});
 assert.equal((await contact(req({...values,email:'invalid'}),{})).status,400);
 assert.equal((await contact(req({...values,inquiryType:'unrecognized'}),{})).status,400);

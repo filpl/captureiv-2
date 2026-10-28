@@ -20,4 +20,4 @@ http.createServer(async(req,res)=>{
   const result=await worker.fetch(request,{DB:contactStore});
   res.writeHead(result.status,Object.fromEntries(result.headers));res.end(Buffer.from(await result.arrayBuffer()));
  }catch{res.writeHead(500);res.end('Preview failed')}
-}).listen(port,host,()=>console.log(`Construct IV preview: http://${host==='0.0.0.0'?'127.0.0.1':host}:${port}\nContact inquiries are saved locally in the ignored .local/ folder; production uses the configured D1 database.`));
+}).listen(port,host,()=>console.log(`Capture IV preview: http://${host==='0.0.0.0'?'127.0.0.1':host}:${port}\nContact inquiries are saved locally in the ignored .local/ folder; production uses the configured D1 database.`));

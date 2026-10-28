@@ -9,7 +9,7 @@
 {% if features.viewer_links %}<section class="panel admin-panel project-access-panel" id="project-access">
   <div class="section-title"><div><h2>Project viewer access</h2><p class="muted">Create a share link and four-letter code for read-only project viewing.</p></div></div>
   <form method="post" action="{{ url_for('create_project_access') }}" class="new-viewer-project">
-    <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label for="new-viewer-project-name">New project viewer</label>
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="{{ 'upload' if request.args.get('return_to') == 'upload' else '' }}"><label for="new-viewer-project-name">New project viewer</label>
     <input id="new-viewer-project-name" name="project" maxlength="160" placeholder="Project name" required>
     <label class="check"><input type="checkbox" name="allow_overview"> Overview and timeline</label><label class="check"><input type="checkbox" name="allow_media"> Media tab</label><label class="check"><input type="checkbox" name="allow_documents"> Documents tab</label><label class="viewer-expiry">Link expires on (optional)<input type="date" name="expires_on"></label>
     <button class="button primary small">Create project and code</button>

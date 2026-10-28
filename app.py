@@ -144,6 +144,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=secure_cookies,
+    TEMPLATES_AUTO_RELOAD=app_env != "production",
     REMEMBER_COOKIE_HTTPONLY=True,
     REMEMBER_COOKIE_SAMESITE="Lax",
     REMEMBER_COOKIE_SECURE=secure_cookies,
@@ -1671,7 +1672,8 @@ def render_project_view(access):
     token = access.share_token
     flights = Flight.query.filter_by(project=access.project, company_id=access.company_id).order_by(Flight.date.desc(), Flight.uploaded_at.desc()).all()
     docs = ProjectFile.query.filter_by(project=access.project, company_id=access.company_id).order_by(ProjectFile.date.desc(), ProjectFile.uploaded_at.desc()).all()
-    dates = sorted({f.date for f in flights}, reverse=True)
+    all_flight_paths = ProjectFlightPath.query.filter_by(project=access.project, company_id=access.company_id).order_by(ProjectFlightPath.date, ProjectFlightPath.created_at).all()
+    dates = sorted({f.date for f in flights} | {path.date for path in all_flight_paths}, reverse=True)
     selected_date = parse_date(request.args.get("date"))
     if selected_date not in dates:
         selected_date = dates[0] if dates else now_utc().date()
@@ -1716,16 +1718,19 @@ def render_project_view(access):
                 "label": str(pin.get("label") or "Site photo")[:80],
                 "photos": by_pin.get(str(pin.get("id") or ""), []),
             })
-    flight_paths = ProjectFlightPath.query.filter_by(project=access.project, date=selected_date, company_id=access.company_id).order_by(ProjectFlightPath.created_at).all()
-    flight_path_data = []
-    for path in flight_paths:
+    flight_paths_by_date = {}
+    for path in all_flight_paths:
         try:
             points = json.loads(path.points or "[]")
         except (TypeError, json.JSONDecodeError):
             points = []
-        flight_path_data.append({"id": path.id, "name": path.name, "label": path.label,
-                                 "direction": path.direction, "points": points,
-                                 "flight_id": path.flight_id, "flight_title": path.flight.title if path.flight else ""})
+        flight_paths_by_date.setdefault(path.date.isoformat(), []).append(
+            {"id": path.id, "name": path.name, "label": path.label,
+             "direction": path.direction, "points": points,
+             "flight_id": path.flight_id, "flight_title": path.flight.title if path.flight else ""}
+        )
+    flight_path_data = flight_paths_by_date.get(selected_date.isoformat(), [])
+    compare_date = next((d for d in dates if d != selected_date), selected_date)
     selected_id = request.args.get("flight", type=int)
     selected_flight = next((f for f in day_flights if f.id == selected_id), None) or (day_flights[0] if day_flights else None)
     tab = request.args.get("tab", "map")
@@ -1746,7 +1751,8 @@ def render_project_view(access):
                            selected_date=selected_date, selected_flight=selected_flight, tab=tab,
                            site_map=site_map, photo_reference=photo_reference, site_reference=site_reference,
                            map_pins=map_pins, map_pin_data=map_pin_data, photo_pin_data=photo_pin_data,
-                           site_setup=site_setup, flight_paths=flight_path_data)
+                           site_setup=site_setup, flight_paths=flight_path_data,
+                           flight_paths_by_date=flight_paths_by_date, compare_date=compare_date)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1787,7 +1793,7 @@ def send_account_email(recipient, subject, body):
         return False
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = os.environ.get("MAIL_FROM", "Construct IV <no-reply@constructiv.com>")
+    message["From"] = os.environ.get("MAIL_FROM", "Capture IV <no-reply@constructiv.com>")
     message["To"] = recipient
     message.set_content(body)
     port = int(os.environ.get("SMTP_PORT", "587"))
@@ -1855,7 +1861,7 @@ def register():
             db.session.commit()
             verify_url = absolute_app_url("verify_email", token=raw_token)
             try:
-                delivered = send_account_email(email, "Verify your Construct IV account",
+                delivered = send_account_email(email, "Verify your Capture IV account",
                     f"Hello {first},\n\nVerify your email within 24 hours: {verify_url}\n\nYour account will remain pending until subscription billing is confirmed.")
             except Exception:
                 app.logger.exception("Account verification email delivery failed")
@@ -1910,7 +1916,7 @@ def resend_verification():
         db.session.commit()
         verify_url = absolute_app_url("verify_email", token=raw_token)
         try:
-            delivered = send_account_email(user.email, "Verify your Construct IV account",
+            delivered = send_account_email(user.email, "Verify your Capture IV account",
                 f"Verify your email within 24 hours: {verify_url}\n\nYour account will remain pending until subscription billing is confirmed.")
         except Exception:
             app.logger.exception("Account verification email resend failed")
@@ -1935,7 +1941,7 @@ def forgot_password():
             db.session.commit()
             reset_url = absolute_app_url("reset_password_with_token", token=raw_token)
             try:
-                delivered = send_account_email(email, "Reset your Construct IV password",
+                delivered = send_account_email(email, "Reset your Capture IV password",
                     f"Use this secure link within one hour to set a new password: {reset_url}")
             except Exception:
                 app.logger.exception("Password reset email delivery failed")
@@ -2145,7 +2151,7 @@ def cancel_subscription():
     audit("subscription_cancellation_scheduled", "subscription", subscription.id,
           f"Cancel at paid-through date {subscription.current_period_end.isoformat() if subscription.current_period_end else 'from Stripe'}")
     try:
-        send_account_email(current_user.email or current_user.username, "Construct IV cancellation scheduled",
+        send_account_email(current_user.email or current_user.username, "Capture IV cancellation scheduled",
                            f"Your {subscription.plan.name if subscription.plan else 'subscription'} renewal is canceled. "
                            f"Paid access remains active through {subscription.current_period_end.strftime('%b %d, %Y') if subscription.current_period_end else 'the paid-through date shown in your billing dashboard'}. "
                            "Your project records and uploaded files have not been deleted. No automatic refund was issued.")
@@ -2588,7 +2594,7 @@ def enterprise_request():
             if ENTERPRISE_INQUIRY_EMAIL:
                 try:
                     notification_delivered = send_account_email(
-                        ENTERPRISE_INQUIRY_EMAIL, "New Construct IV Enterprise pricing request", message)
+                        ENTERPRISE_INQUIRY_EMAIL, "New Capture IV Enterprise pricing request", message)
                 except Exception:
                     app.logger.exception("Enterprise request notification could not be sent")
             return render_template("enterprise_received.html",
@@ -2714,7 +2720,7 @@ def update_subscription_plan(plan_id):
     monthly_price_id = request.form.get("stripe_monthly_price_id", "").strip()[:160]
     annual_price_id = request.form.get("stripe_annual_price_id", "").strip()[:160]
     if monthly_amount != BASIC_MONTHLY_PRICE_CENTS:
-        flash("Construct IV Basic is fixed at $399 per month.", "error")
+        flash("Capture IV Basic is fixed at $399 per month.", "error")
         return redirect(url_for("platform_owner_dashboard"))
     if monthly_price_id and not re.fullmatch(r"price_[A-Za-z0-9]+", monthly_price_id):
         flash("Enter a valid Stripe monthly Price ID.", "error")
@@ -2796,8 +2802,8 @@ def create_owner_company():
 
     setup_url = absolute_app_url("enterprise_setup", token=raw_token)
     try:
-        delivered = send_account_email(email, "Set up your Construct IV Enterprise account",
-            f"Hello {contact},\n\nYour Construct IV workspace is ready for setup. Create your password and continue to secure subscription checkout here: {setup_url}\n\nThe workspace remains inactive until Stripe confirms payment.")
+        delivered = send_account_email(email, "Set up your Capture IV Enterprise account",
+            f"Hello {contact},\n\nYour Capture IV workspace is ready for setup. Create your password and continue to secure subscription checkout here: {setup_url}\n\nThe workspace remains inactive until Stripe confirms payment.")
     except Exception:
         app.logger.exception("Manual Enterprise invitation email delivery failed")
         delivered = False
@@ -2834,7 +2840,7 @@ def resend_manual_company_invite(company_id):
     db.session.commit()
     setup_url = absolute_app_url("enterprise_setup", token=raw_token)
     try:
-        delivered = send_account_email(user.email, "Set up your Construct IV Enterprise account",
+        delivered = send_account_email(user.email, "Set up your Capture IV Enterprise account",
             f"Hello {user.name},\n\nCreate your password and continue to secure subscription checkout here: {setup_url}\n\nThe workspace remains inactive until Stripe confirms payment.")
     except Exception:
         app.logger.exception("Manual Enterprise setup invitation resend failed")
@@ -2938,7 +2944,7 @@ def resend_enterprise_setup(request_id):
     setup_url = absolute_app_url("enterprise_setup", token=raw_token)
     db.session.commit()
     try:
-        delivered = send_account_email(user.email, "Set up your Construct IV Enterprise account",
+        delivered = send_account_email(user.email, "Set up your Capture IV Enterprise account",
             f"Create your password and continue to secure checkout: {setup_url}")
     except Exception:
         app.logger.exception("Enterprise setup resend failed")
@@ -3012,7 +3018,7 @@ def provision_enterprise_request(request_id):
 
     setup_url = absolute_app_url("enterprise_setup", token=raw_token)
     try:
-        delivered = send_account_email(email, "Set up your Construct IV Enterprise account",
+        delivered = send_account_email(email, "Set up your Capture IV Enterprise account",
             f"Hello {item.contact_name},\n\nYour Enterprise request has been approved. Create your account password and continue to secure subscription checkout here: {setup_url}\n\nThe workspace will remain inactive until Stripe confirms payment.")
     except Exception:
         app.logger.exception("Enterprise invitation email delivery failed")
@@ -3144,7 +3150,7 @@ def dashboard():
         billing_summary = {
             "plan": plan.name if plan else "Custom workspace",
             "interval": subscription.billing_interval or "monthly",
-            "price": f"${amount_cents / 100:,.2f} / {subscription.billing_interval or 'month'}" if amount_cents is not None else "Price configured by Construct IV",
+            "price": f"${amount_cents / 100:,.2f} / {subscription.billing_interval or 'month'}" if amount_cents is not None else "Price configured by Capture IV",
             "status": ("Canceling" if subscription.cancel_at_period_end and subscription.status in {"active", "trialing"}
                        else subscription.status.replace("_", " ").title()),
             "period_end": subscription.current_period_end,
@@ -3273,7 +3279,7 @@ def protected_file(filename):
 @app.route("/admin/site-capture", endpoint="site_capture")
 @admin_required
 def admin():
-    if request.endpoint == "site_capture" and not company_feature_enabled("site_maps"):
+    if request.path in {"/admin/site-capture", "/admin/upload"} and not company_feature_enabled("site_maps"):
         abort(403)
     member_ids = [row.user_id for row in CompanyMembership.query.filter_by(company_id=current_company_id()).all()]
     users = User.query.filter(User.id.in_(member_ids)).order_by(User.created_at.desc()).all() if member_ids else []
@@ -3332,7 +3338,168 @@ def admin():
 @admin_required
 def fieldview_sandbox():
     """Open the standalone interactive site-capture sandbox."""
-    return render_template("fieldview_sandbox.html")
+    return render_template("fieldview_sandbox.html", csrf_value=csrf_token(),
+                           default_project_name="Harrisburg Commerce Center",
+                           sandbox_save_url=url_for("save_fieldview_sandbox_project"))
+
+
+@app.post("/admin/fieldview-sandbox/save")
+@admin_required
+@company_feature_required("site_maps")
+def save_fieldview_sandbox_project():
+    """Persist a sandbox capture as a named company project and open its viewer."""
+    try:
+        payload = json.loads(request.form.get("project_data", "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return jsonify({"error": "The project data could not be read. Keep the editor open and try again."}), 400
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid project data."}), 400
+    project = str(payload.get("project_name", "")).strip()[:160]
+    module = str(payload.get("module", "map"))
+    address = str(payload.get("address", "")).strip()[:300]
+    routes = payload.get("routes", [])
+    annotations = payload.get("annotations", {})
+    if not project:
+        return jsonify({"error": "Enter a project name before saving."}), 400
+    if not company_feature_enabled("viewer_links"):
+        return jsonify({"error": "Viewer links are not included in this workspace plan."}), 403
+    if module not in {"map", "image", "ortho"} or not isinstance(routes, list) or len(routes) > 300:
+        return jsonify({"error": "The site setup or flight routes are invalid."}), 400
+    if any(request.files.get(f"route_video_{index}") and request.files[f"route_video_{index}"].filename
+           for index in range(len(routes))) and not company_feature_enabled("flight_scans"):
+        return jsonify({"error": "Flight video uploads are not included in this workspace plan."}), 403
+    reference_upload = request.files.get("site_reference")
+    if module in {"image", "ortho"} and (not reference_upload or not reference_upload.filename):
+        return jsonify({"error": "Re-select the site image or orthomosaic before saving so it can be stored with the project."}), 400
+    if project in company_project_names(current_company_id()):
+        return jsonify({"error": "That project name already exists. Choose a different name so existing project data is not overwritten."}), 409
+    if not project_capacity_available(project):
+        return jsonify({"error": "Your plan has reached its project limit."}), 403
+
+    try:
+        center = payload.get("center", [])
+        center_lat, center_lng = float(center[0]), float(center[1])
+        zoom = max(2, min(20, int(payload.get("zoom", 16))))
+        if not (math.isfinite(center_lat) and -90 <= center_lat <= 90 and math.isfinite(center_lng) and -180 <= center_lng <= 180):
+            raise ValueError
+    except (TypeError, ValueError, IndexError):
+        return jsonify({"error": "The map location is invalid."}), 400
+
+    normalized_routes = []
+    for route in routes:
+        if not isinstance(route, dict) or not str(route.get("name", "")).strip():
+            return jsonify({"error": "Every route needs a name."}), 400
+        raw_points = route.get("points", [])
+        if not isinstance(raw_points, list) or not 2 <= len(raw_points) <= 1000:
+            return jsonify({"error": f"Route {route.get('name', '')} needs at least two points."}), 400
+        points = []
+        try:
+            for point in raw_points:
+                lat, lng = float(point[0]), float(point[1])
+                if not (math.isfinite(lat) and -90 <= lat <= 90 and math.isfinite(lng) and -180 <= lng <= 180):
+                    raise ValueError
+                points.append([lat, lng])
+            route_date = parse_date(route.get("date", ""))
+        except (TypeError, ValueError, IndexError):
+            return jsonify({"error": f"Route {route.get('name', '')} has invalid coordinates or date."}), 400
+        if not route_date:
+            return jsonify({"error": f"Route {route.get('name', '')} needs a valid flight date."}), 400
+        normalized_routes.append({
+            "name": str(route["name"]).strip()[:160],
+            "label": str(route.get("label", "")).strip()[:64],
+            "direction": str(route.get("direction", "Custom path")).strip()[:40] or "Custom path",
+            "date": route_date, "points": points,
+            "video": request.files.get(f"route_video_{len(normalized_routes)}"),
+        })
+
+    stored_uploads = []
+    try:
+        setup = ProjectSiteSetup(project=project, module=module, address=address,
+                                 center_lat=center_lat, center_lng=center_lng, zoom=zoom, locked=True)
+        db.session.add(setup)
+        photo = reference_upload
+        if photo and photo.filename:
+            allowed = {"jpg", "jpeg", "png", "webp"} if module == "image" else ({"tif", "tiff"} if module == "ortho" else set())
+            if not allowed or extension(photo.filename) not in allowed:
+                return jsonify({"error": "Choose a valid site reference file for the selected map type."}), 400
+            stored = save_upload(photo)
+            stored_uploads.append(stored)
+            filename, size, _checksum, original, reservation_id = stored
+            if module == "image":
+                db.session.add(ProjectPhotoReference(project=project, filename=filename,
+                    original_filename=original, file_size=size))
+            else:
+                db.session.add(ProjectSiteMap(project=project, filename=filename,
+                    original_filename=original, file_size=size))
+            complete_storage_reservation(reservation_id)
+
+        if not isinstance(annotations, dict):
+            annotations = {"areas": [], "pins": []}
+        clean_annotations = {"areas": [], "pins": []}
+        for area in annotations.get("areas", [])[:300]:
+            if not isinstance(area, dict) or not isinstance(area.get("points"), list):
+                continue
+            clean_annotations["areas"].append({"label": str(area.get("name", "Coverage area"))[:80],
+                                                "points": area["points"][:500]})
+        for pin in annotations.get("pins", [])[:1000]:
+            if isinstance(pin, dict):
+                clean_annotations["pins"].append({"id": secrets.token_urlsafe(12),
+                    "x": max(0, min(1000, float(pin.get("x", 0)))),
+                    "y": max(0, min(620, float(pin.get("y", 0)))),
+                    "label": str(pin.get("label", "Photo"))[:120]})
+        if clean_annotations["areas"] or clean_annotations["pins"]:
+            db.session.add(ProjectPhotoAnnotation(project=project, data=json.dumps(clean_annotations)))
+
+        for index, route in enumerate(normalized_routes):
+            linked_flight = None
+            video = route["video"]
+            if video and video.filename:
+                if not ext_allowed(video.filename, ALLOWED_VIDEO):
+                    raise ValueError(f"{video.filename} is not a supported video file.")
+                stored = save_upload(video)
+                stored_uploads.append(stored)
+                filename, size, checksum, original, reservation_id = stored
+                linked_flight = Flight(
+                    flight_id=f"sandbox-{secrets.token_hex(8)}", date=route["date"],
+                    direction=route["direction"] if route["direction"] in DIRECTIONS else "Custom path",
+                    title=route["name"][:200], filename=filename, original_filename=original,
+                    file_size=size, uploaded_by=current_user.id, project=project,
+                    checksum_sha256=checksum, status="ready")
+                db.session.add(linked_flight)
+                db.session.flush()
+                complete_storage_reservation(reservation_id)
+            db.session.add(ProjectFlightPath(project=project, date=route["date"],
+                name=route["name"], label=route["label"], direction=route["direction"],
+                points=json.dumps(route["points"]), flight_id=linked_flight.id if linked_flight else None))
+
+        access = ProjectAccess(project=project, code="", share_token=secrets.token_urlsafe(32),
+                               allow_overview=True, allow_media=True, allow_documents=True)
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+        for _ in range(100):
+            access.code = "".join(secrets.choice(alphabet) for _ in range(4))
+            if not ProjectAccess.query.filter_by(code=access.code).first():
+                break
+        else:
+            raise RuntimeError("Could not allocate a viewer access code.")
+        db.session.add(access)
+        if not ProjectAssignment.query.filter_by(company_id=current_company_id(),
+                user_id=current_user.id, project=project).first():
+            db.session.add(ProjectAssignment(company_id=current_company_id(), user_id=current_user.id, project=project))
+        db.session.commit()
+        audit("sandbox_project_save", "project", project,
+              f"Saved site capture with {len(normalized_routes)} flight routes")
+        session["viewer_code"], session["viewer_token"] = access.code, access.share_token
+        viewer_url = url_for("shared_project", token=access.share_token, tab="map")
+        return jsonify({"ok": True, "project": project, "viewer_url": viewer_url})
+    except Exception as exc:
+        db.session.rollback()
+        for stored in stored_uploads:
+            delete_stored_file(stored[0])
+            release_storage_reservation(stored[4])
+        app.logger.exception("Sandbox project save failed")
+        if isinstance(exc, ValueError):
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": "The project could not be saved. Your sandbox changes are still on screen; try again."}), 500
 
 
 @app.post("/admin/projects/photo-reference")
@@ -3357,12 +3524,21 @@ def upload_project_photo_reference():
             reference.filename, reference.original_filename, reference.file_size, reference.uploaded_at = filename, original, size, now_utc()
         else:
             db.session.add(ProjectPhotoReference(project=project, filename=filename, original_filename=original, file_size=size))
+        # A photo coverage reference is also a valid background for the flight
+        # route editor. Keep it in its existing model and point the site setup
+        # at image mode so routes can be drawn over the uploaded image.
+        setup = ProjectSiteSetup.query.filter_by(project=project).first()
+        if not setup:
+            setup = ProjectSiteSetup(project=project, module="image")
+            db.session.add(setup)
+        else:
+            setup.module = "image"
         complete_storage_reservation(reservation_id)
         db.session.commit()
         if old_filename:
             delete_stored_file(old_filename)
         audit("upload_photo_reference", "project", project, f"Uploaded photo coverage reference {original}")
-        flash("Photo coverage image uploaded.", "success")
+        flash("Site image uploaded. Draw and save flight routes over it in Videos & routes.", "success")
     except Exception:
         db.session.rollback()
         if stored:
@@ -3370,7 +3546,7 @@ def upload_project_photo_reference():
             release_storage_reservation(stored[4])
         app.logger.exception("Photo reference upload failed")
         flash("Photo reference upload failed.", "error")
-    return redirect(f"/admin/upload?map_project={quote(project)}#photos")
+    return redirect(f"/admin/upload?map_project={quote(project)}#videos")
 
 
 @app.post("/admin/projects/photo-annotations")
@@ -3521,6 +3697,9 @@ def create_project_access():
     project = request.form.get("project", "").strip()[:160]
     if not project:
         abort(400, "Project is required")
+    if request.form.get("return_to") == "upload" and project in company_project_names(current_company_id()):
+        flash("That project already exists. Select it in the workspace to edit its setup; its viewer link and uploaded files were left unchanged.", "error")
+        return redirect(f"/admin/upload?map_project={quote(project)}#overview")
     if not project_capacity_available(project):
         flash("The project limit for this plan has been reached.", "error")
         return redirect(url_for("admin"))
@@ -3551,6 +3730,9 @@ def create_project_access():
     access.allow_documents = request.form.get("allow_documents") == "on"
     db.session.commit()
     audit("project_access", "project", project, "Generated or rotated a four-character viewer code")
+    if request.form.get("return_to") == "upload":
+        flash(f"Created {project}. Its site setup and uploads are ready to edit.", "success")
+        return redirect(f"/admin/upload?map_project={quote(project)}#overview")
     flash(f"Viewer access updated for {project}.", "success")
     return redirect(url_for("admin") + "#project-access")
 
@@ -3573,6 +3755,11 @@ def revoke_project_access(access_id):
 @company_feature_required("flight_scans")
 def upload():
     if request.method == "GET":
+        # Administrators use the unified project workspace for both mapping and
+        # footage uploads. Keep the legacy upload form for employee accounts
+        # and plans that do not include site mapping.
+        if current_user.is_admin and company_feature_enabled("site_maps"):
+            return admin()
         project_names = {r[0] for r in db.session.query(Flight.project).distinct().all() if r[0]}
         project_names.update(r[0] for r in db.session.query(ProjectFile.project).distinct().all() if r[0])
         project_names.update(r[0] for r in db.session.query(ProjectAccess.project).distinct().all())
@@ -4182,6 +4369,17 @@ def save_project_flight_path():
         pass
     db.session.commit()
     audit("save_flight_path", "project", project, f"Saved {name} for {date_value}")
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({
+            "id": path.id,
+            "name": path.name,
+            "label": path.label,
+            "direction": path.direction,
+            "date": path.date.isoformat(),
+            "points": normalized,
+            "flight_id": path.flight_id,
+            "video_url": url_for("protected_file", filename=linked_flight.filename) if linked_flight else "",
+        })
     flash("Flight path saved.", "success")
     return redirect(f"/admin/upload?map_project={quote(project)}&map_date={date_value.isoformat()}#{'overview' if request.form.get('return_to') == 'overview' else 'videos'}")
 
@@ -4388,8 +4586,8 @@ def create_user():
     db.session.commit()
     invite_url = absolute_app_url("employee_setup", token=raw_token)
     try:
-        delivered = send_account_email(email, "Set up your Construct IV account",
-            f"Hello {name},\n\nYour company invited you to Construct IV. Choose a password using this secure link within 48 hours: {invite_url}")
+        delivered = send_account_email(email, "Set up your Capture IV account",
+            f"Hello {name},\n\nYour company invited you to Capture IV. Choose a password using this secure link within 48 hours: {invite_url}")
     except Exception:
         app.logger.exception("Employee invitation email delivery failed")
         delivered = False
@@ -4455,8 +4653,8 @@ def resend_employee_invite(user_id):
     db.session.commit()
     invite_url = absolute_app_url("employee_setup", token=raw_token)
     try:
-        delivered = send_account_email(user.email, "Set up your Construct IV account",
-            f"Hello {user.name},\n\nYour company invited you to Construct IV. Choose a password using this secure link within 48 hours: {invite_url}")
+        delivered = send_account_email(user.email, "Set up your Capture IV account",
+            f"Hello {user.name},\n\nYour company invited you to Capture IV. Choose a password using this secure link within 48 hours: {invite_url}")
     except Exception:
         app.logger.exception("Employee invitation resend failed")
         delivered = False

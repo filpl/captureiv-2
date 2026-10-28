@@ -1,10 +1,10 @@
-# Construct IV billing and cancellation disclosures — draft for owner review
+# Capture IV billing and cancellation disclosures — draft for owner review
 
 **Internal draft only. Do not publish as final terms or activate live billing from this document.** Review the refund, renewal, suspension, and data-retention language with the Platform Owner and appropriate legal counsel before launch.
 
 ## Basic subscription
 
-Construct IV Basic is **$399 per month**, billed as a recurring Stripe subscription on the subscription's actual billing anniversary. Basic includes one company workspace, one active construction project, two authenticated company accounts (including the company administrator), 1 TB of total occupied storage, and unlimited authorized public viewers. One TB is defined as 1,000,000,000,000 bytes. This is a total capacity limit, not a monthly upload allowance. No paid storage add-ons are currently offered.
+Capture IV Basic is **$399 per month**, billed as a recurring Stripe subscription on the subscription's actual billing anniversary. Basic includes one company workspace, one active construction project, two authenticated company accounts (including the company administrator), 1 TB of total occupied storage, and unlimited authorized public viewers. One TB is defined as 1,000,000,000,000 bytes. This is a total capacity limit, not a monthly upload allowance. No paid storage add-ons are currently offered.
 
 Annual Basic billing is unavailable until the Platform Owner approves the annual amount and configures its Stripe Price ID. Enterprise remains custom scoped and priced under its existing customer-specific agreements.
 
@@ -20,7 +20,7 @@ Submitting an annual refund request does not cancel the subscription, pause acce
 
 The application measures occupied storage in bytes, including completed project files and media. Uploads that would exceed the configured company allowance are rejected. The application does not automatically delete footage, projects, billing history, or audit records when a subscription ends.
 
-After paid access expires, new uploads and paid project functionality may be restricted. The final post-cancellation access, export, and retention period has not been selected. Construct IV does not promise indefinite retention. No automatic deletion process is enabled by this draft. The Platform Owner must approve the retention and recovery policy before production.
+After paid access expires, new uploads and paid project functionality may be restricted. The final post-cancellation access, export, and retention period has not been selected. Capture IV does not promise indefinite retention. No automatic deletion process is enabled by this draft. The Platform Owner must approve the retention and recovery policy before production.
 
 ## Production approval checklist
 

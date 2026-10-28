@@ -41,3 +41,5 @@
 .navigation-label{font-size:9px;font-weight:600;color:#748078}
 #locationStep[hidden],#addressSearchWrap[hidden],#addressSearchNote[hidden]{display:none!important}
 #layerButton[hidden],#referenceBasemapToggle[hidden]{display:none!important}
+.save-project-error{margin:8px 0;padding:9px 11px;border-radius:6px;background:#fff1ed;color:#9b3d32;font-size:11px;line-height:1.45}
+.save-project-error[hidden]{display:none}

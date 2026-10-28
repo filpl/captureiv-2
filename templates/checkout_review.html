@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}Review billing · Construct IV{% endblock %}
+{% block title %}Review billing · Capture IV{% endblock %}
 {% block content %}
 <section class="login-card saas-card checkout-review">
   <p class="eyebrow">SECURE CHECKOUT REVIEW</p>
@@ -22,7 +22,7 @@
     <ul>
       <li>Your subscription renews {{ 'annually' if subscription.billing_interval == 'annual' else 'monthly' }} at the price shown above until cancelled.</li>
       <li>Cancellation stops the next renewal. Access continues through the paid billing period end; cancellation does not delete workspace data.</li>
-      <li>Cancellation does not automatically issue a refund. Annual refund requests are reviewed separately by Construct IV.</li>
+      <li>Cancellation does not automatically issue a refund. Annual refund requests are reviewed separately by Capture IV.</li>
       <li>There are no automatic storage overage charges or storage add-ons.</li>
     </ul>
     <p class="muted small">These are the current product billing terms for this checkout. Final customer terms and data-retention policy must be approved before production launch.</p>

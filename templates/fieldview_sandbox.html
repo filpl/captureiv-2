@@ -7,11 +7,11 @@
   <link rel="preconnect" href="https://unpkg.com">
   <link rel="preconnect" href="https://tile.openstreetmap.org">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-  <link rel="stylesheet" href="/static/fieldview-sandbox/style.css?v=module-picker-5">
+  <link rel="stylesheet" href="/static/fieldview-sandbox/style.css?v=persist-project-1">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="#"><span class="brand-mark">△</span><span>CONSTRUCT IV<small>VISUAL INTELLIGENCE</small></span></a>
+    <a class="brand" href="#"><span class="brand-mark">△</span><span>CAPTURE IV<small>VISUAL INTELLIGENCE</small></span></a>
     <div class="top-context"><span class="sandbox-dot"></span> Interactive sandbox <span class="divider">/</span> Administration</div>
     <div class="top-user"><span class="user-avatar">MS</span><span>Marwan Salem<small>Administrator</small></span><button class="icon-button" aria-label="More options">•••</button></div>
   </header>
@@ -61,16 +61,17 @@
         </div>
         <div class="map-footer"><span><strong id="pathPointCount">0</strong> path points placed</span><span>Lock saves this map view; unlock to move it.</span></div>
       </section>
-      <div class="sandbox-note"><span>✳</span><span><strong>Sandbox preview</strong><small>Changes here are for demonstration and are not saved to your project.</small></span><button id="resetDemo" class="quiet-action">Reset demo</button></div>
+      <div class="sandbox-note"><span>✳</span><span><strong>Save your site capture</strong><small>Save this setup as a named project in Admin, then open its viewer.</small></span><button id="saveProjectButton" class="button dark small">Save project →</button><button id="resetDemo" class="quiet-action">Reset demo</button></div>
     </main>
   </div>
   <div id="routeVideoModal" class="modal-backdrop" hidden><div class="route-video-modal"><button class="modal-close" id="closeRouteVideo" aria-label="Close video">×</button><p class="eyebrow">FLIGHT VIDEO</p><h2 id="routeVideoTitle">Route video</h2><video id="routeVideoPlayer" controls playsinline hidden></video><p id="routeVideoEmpty" class="route-video-empty" hidden>No video is linked yet. Choose a video in the Flight paths panel to add it to this route.</p><button class="button dark full-width" id="closeRouteVideo2">Close</button></div></div>
+  <div id="saveProjectModal" class="modal-backdrop" hidden><form id="saveProjectForm" class="preview-modal" data-url="{{ sandbox_save_url }}" data-csrf="{{ csrf_value }}"><button type="button" class="modal-close" id="cancelSaveProject" aria-label="Cancel">×</button><p class="eyebrow">SAVE TO PROJECTS</p><h2>Save this project</h2><p>Save the site setup and flight paths in your admin project list, then open its viewer.</p><label class="layout-name-field">Project name<input id="saveProjectName" required maxlength="160" value="{{ default_project_name }}" placeholder="Enter a project name"></label><p id="saveProjectError" class="save-project-error" role="alert" hidden></p><div class="layout-modal-actions"><button type="button" id="cancelSaveProject2" class="button outline">Cancel</button><button type="submit" id="confirmSaveProject" class="button dark">Save and open viewer</button></div></form></div>
   <div id="saveLayoutModal" class="modal-backdrop" hidden><form id="saveLayoutForm" class="preview-modal"><button type="button" class="modal-close" id="cancelSaveLayout" aria-label="Cancel">×</button><p class="eyebrow">REUSABLE FLIGHT SETUP</p><h2>Save map layout</h2><p>Save this map view and its flight paths so you can reuse them on a future flight date.</p><label class="layout-name-field">Layout name<input id="layoutNameInput" required maxlength="60" placeholder="e.g. Weekly north-south survey"></label><div class="layout-modal-actions"><button type="button" id="cancelSaveLayout2" class="button outline">Cancel</button><button type="submit" class="button dark">Save layout</button></div></form></div>
   <div id="previewModal" class="modal-backdrop" hidden><div class="preview-modal"><button class="modal-close" id="closePreview">×</button><p class="eyebrow">VIEWER PREVIEW</p><h2>Site overview</h2><p>Viewers see your coverage areas, photo locations, and drone flight paths on their project page.</p><div class="preview-summary"><div><strong id="previewAreas">2</strong><span>photo areas</span></div><div><strong id="previewPins">3</strong><span>photo locations</span></div><div><strong id="previewRoutes">1</strong><span>flight paths</span></div></div><button class="button dark full-width" id="closePreview2">Back to editing</button></div></div>
   <script src="/static/fieldview-sandbox/config.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
   <script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
-  <script src="/static/fieldview-sandbox/app.js?v=module-picker-5"></script>
+  <script src="/static/fieldview-sandbox/app.js?v=persist-project-1"></script>
 </body>
 </html>

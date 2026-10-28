@@ -1,8 +1,8 @@
-# Construct IV landing page
+# Capture IV landing page
 
-The current Construct IV marketing website, kept in its own folder so it can be developed separately from the Flask platform. This contribution adds no changes to the platform's Python code, accounts, database, or uploads.
+The current Capture IV marketing website, kept in its own folder so it can be developed separately from the Flask platform. This contribution adds no changes to the platform's Python code, accounts, database, or uploads.
 
-Includes the homepage, Platform, Solutions, Clients, Pricing, About Us and Contact pages; responsive navigation; the Construct IV wordmark; Basic and Enterprise package information; team-size selection; and a demo-request handoff to the contact form. Basic is listed at $399/month. Annual billing is intentionally unavailable until its amount is approved and configured in the platform.
+Includes the homepage, Platform, Solutions, Clients, Pricing, About Us and Contact pages; responsive navigation; the Capture IV wordmark; Basic and Enterprise package information; team-size selection; and a demo-request handoff to the contact form. Basic is listed at $399/month. Annual billing is intentionally unavailable until its amount is approved and configured in the platform.
 
 ## Run and check
 
@@ -27,7 +27,7 @@ The checked-in `site.config.json` points Sign in, Client Portal, Get started, an
 
 If both apps share a domain and `/login` is reserved for the platform, use `/login`. The legacy `/portal` path redirects to the configured login, with no intermediate page.
 
-This is navigation only: do not copy authentication/session logic into this marketing site. The platform remains responsible for account permissions and project access. On the platform's login and account pages, set the Construct IV logo and Back to home link to your marketing homepage URL. Configure the return URL on the platform separately; this folder does not change the platform application.
+This is navigation only: do not copy authentication/session logic into this marketing site. The platform remains responsible for account permissions and project access. On the platform's login and account pages, set the Capture IV logo and Back to home link to your marketing homepage URL. Configure the return URL on the platform separately; this folder does not change the platform application.
 
 ## Deployment and routes
 
