@@ -1,0 +1,142 @@
+From 78f73dfcb00ba45f3179f54c16605d34f520fb76 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Nov 2026 20:45:23 +0000
+Subject: [PATCH 5/5] Workspace for admins too: Videos & routes and Documents,
+ plus oversight tools
+
+Company admins get the same simplified workspace as workers (Videos & routes
+opens first, then Documents); the separate Upload footage tab, Photos tab and
+Overview link are hidden for everyone. Admin-only oversight stays: project
+setup, site image and boundary, client access, team, billing, deleting.
+The admin menu's Upload link becomes Workspace (site capture) and is
+highlighted there. Navigation tests updated for the new label.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HbptFaAKPeT417LTNgj5bU
+---
+ app.py                            | 4 ++--
+ static/site-capture.js            | 2 +-
+ templates/_topbar.html            | 2 +-
+ templates/site_capture.html       | 4 ++--
+ tests/test_navigation_sessions.py | 8 ++++----
+ tests/test_worker_accounts.py     | 5 +++++
+ 6 files changed, 15 insertions(+), 10 deletions(-)
+
+diff --git a/app.py b/app.py
+index a3dfe1f..6b4408c 100644
+--- a/app.py
++++ b/app.py
+@@ -847,7 +847,7 @@ def navigation_context():
+         section = "owner"
+     elif endpoint == "fieldview_sandbox":
+         section = "sandbox"
+-    elif endpoint == "upload" or request.path.startswith(("/admin/upload", "/admin/r2-upload")):
++    elif endpoint in {"upload", "site_capture"} or request.path.startswith(("/admin/upload", "/admin/site-capture", "/admin/r2-upload")):
+         section = "upload"
+     elif endpoint == "billing_portal":
+         section = "billing"
+@@ -3923,7 +3923,7 @@ def render_capture_workspace(worker_mode=False):
+                            worker_mode=worker_mode, project_docs=project_docs,
+                            project_names=sorted(project_names, key=str.casefold), access_rows=access_rows,
+                            projects=sorted(project_names, key=str.casefold), directions=DIRECTIONS,
+-                           initial_view="videos" if worker_mode else ("uploads" if request.path == "/admin/upload" else "videos"),
++                           initial_view="videos",
+                            workspace_url=url_for("upload") if worker_mode else url_for("site_capture"),
+                            selected_map_project=selected_map_project, selected_site_map=selected_site_map,
+                            selected_photo_reference=selected_photo_reference,
+diff --git a/static/site-capture.js b/static/site-capture.js
+index 4dc130f..64fe5ce 100644
+--- a/static/site-capture.js
++++ b/static/site-capture.js
+@@ -71,5 +71,5 @@
+   pinPhotoDrop?.addEventListener('drop',e=>{if(e.dataTransfer.files.length){pinPhotoInput.files=e.dataTransfer.files;pinPhotoInput.dispatchEvent(new Event('change',{bubbles:true}))}});
+   $('#pinPhotoUpload')?.addEventListener('submit',async e=>{e.preventDefault();if(!selectedPhotoPinId||!pinPhotoInput.files.length)return;const form=e.currentTarget,button=form.querySelector('button[type=submit]'),status=$('#pinPhotoStatus');button.disabled=true;status.textContent='Uploading…';const data=new FormData(form);data.set('project',photosRoot.dataset.project);data.set('_csrf',photosRoot.dataset.csrf);try{const response=await fetch('/admin/projects/photo-pin-photos',{method:'POST',headers:{'X-CSRF-Token':photosRoot.dataset.csrf},body:data}),result=await response.json();if(!response.ok)throw Error(result.error||'Photo upload failed');photoAssets.push(...result.photos.map(photo=>({...photo,pin_id:selectedPhotoPinId})));pinPhotoInput.value='';pinPhotoInput.dispatchEvent(new Event('change'));renderPinPhotoManager()}catch(error){status.textContent=error.message}finally{button.disabled=false}});
+   if(addedLegacyIds)save();
+-  {const fromHash=location.hash.slice(1);const hashView=document.querySelector(`[data-capture-view="${fromHash}"]`);if(['photos','overview','uploads','documents','videos'].includes(fromHash)&&hashView&&!(document.body.classList.contains('worker-mode')&&hashView.classList.contains('worker-hidden')))switchView(fromHash);else switchView(document.body.dataset.initialView||'videos');}render();
++  {const fromHash=location.hash.slice(1);const hashView=document.querySelector(`[data-capture-view="${fromHash}"]`);if(['photos','overview','uploads','documents','videos'].includes(fromHash)&&hashView&&!hashView.classList.contains('worker-hidden'))switchView(fromHash);else switchView(document.body.dataset.initialView||'videos');}render();
+ })();
+diff --git a/templates/_topbar.html b/templates/_topbar.html
+index 8f298f6..5ece6db 100644
+--- a/templates/_topbar.html
++++ b/templates/_topbar.html
+@@ -4,7 +4,7 @@
+     {% set links = [('archive', 'dashboard', 'Archive')] %}
+     {% if g.retrieval_only %}{% set links = [('archive', 'retrieve_workspace', 'Retrieve files')] %}
+     {% else %}
+-      {% if current_user.is_admin %}{% set links = links + [('admin', 'admin', 'Admin'), ('upload', 'upload', 'Upload')] %}
++      {% if current_user.is_admin %}{% set links = links + [('admin', 'admin', 'Admin'), ('upload', 'site_capture', 'Workspace')] %}
+         {% if not current_user.platform_owner %}{% set links = links + [('billing', 'billing_portal', 'Billing')] %}{% endif %}
+       {% endif %}
+       {% if not current_user.is_admin and not current_user.platform_owner %}{% set links = links + [('upload', 'upload', 'Workspace')] %}{% endif %}
+diff --git a/templates/site_capture.html b/templates/site_capture.html
+index f5d2a32..2fe00c9 100644
+--- a/templates/site_capture.html
++++ b/templates/site_capture.html
+@@ -3,7 +3,7 @@
+ <link rel="stylesheet" href="{{ url_for('static',filename='site-capture.css') }}?v=11">
+ <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+ <link rel="stylesheet" href="{{ url_for('static', filename='navigation.css') }}?v=20261025-privacy">
+-<style>body.worker-mode .admin-only,body.worker-mode .worker-hidden{display:none!important}
++<style>body.worker-mode .admin-only,.worker-hidden{display:none!important}
+ .worker-footage-edit{margin-top:28px;padding-top:20px;border-top:1px solid #e3e8e5}.footage-edit-row,.worker-docs .document-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;padding:12px 0;border-bottom:1px solid #eef1ef}
+ .footage-edit-row label,.worker-docs label,.document-upload-form label{display:grid;gap:4px;font-size:12px;color:#59665f}.footage-edit-row input,.footage-edit-row select,.worker-docs input,.document-upload-form input{padding:8px 10px;border:1px solid #d6ddd9;border-radius:6px;font:inherit;font-size:13px}
+ .footage-edit-date,.doc-date{min-width:96px;font-size:13px;font-weight:600;color:#26332c;padding-bottom:9px}.document-upload-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;padding:16px;margin:14px 0 18px;border:1px solid #e3e8e5;border-radius:10px;background:#fafcfb}
+@@ -50,5 +50,5 @@
+ <div id="legacy-map-editor" hidden></div><div class="sandbox-note"><span>✳</span><span><strong>Site capture</strong><small>Changes are saved to {{ selected_map_project }}.</small></span><a class="quiet-action admin-only" href="/admin">Back to administration</a></div></main></div>
+ <div id="routeVideoModal" class="modal-backdrop" hidden><div class="route-video-modal"><button class="modal-close" id="closeRouteVideo" type="button" aria-label="Close video">×</button><p class="eyebrow">FLIGHT VIDEO</p><h2 id="routeVideoTitle">Route video</h2><video id="routeVideoPlayer" controls playsinline hidden></video><p id="routeVideoEmpty" class="route-video-empty" hidden>No video is linked to this route yet.</p><button class="button dark full-width" id="closeRouteVideo2" type="button">Close</button></div></div>
+ <div id="saveLayoutModal" class="modal-backdrop" hidden><form id="saveLayoutForm" class="preview-modal"><button type="button" class="modal-close" id="cancelSaveLayout" aria-label="Cancel">×</button><p class="eyebrow">REUSABLE FLIGHT SETUP</p><h2>Save map layout</h2><p>Save this site view and route geometry to reuse on a future flight date.</p><label class="layout-name-field">Layout name<input id="layoutNameInput" required maxlength="60" placeholder="e.g. Weekly north-south survey"></label><div class="layout-modal-actions"><button type="button" id="cancelSaveLayout2" class="button outline">Cancel</button><button type="submit" class="button dark">Save layout</button></div></form></div>
+-{% if google_maps_api_key %}<script src="{{ url_for('static',filename='google-site-setup.js') }}?v=5"></script><script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key|urlencode }}&loading=async&callback=initCaptureGoogleMap"></script>{% endif %}<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script><script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script><script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script><script src="{{ url_for('static',filename='r2-upload.js') }}?v=1"></script><script src="{{ url_for('static',filename='site-setup.js') }}?v=13"></script><script src="{{ url_for('static',filename='site-capture.js') }}?v=12"></script>
++{% if google_maps_api_key %}<script src="{{ url_for('static',filename='google-site-setup.js') }}?v=5"></script><script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key|urlencode }}&loading=async&callback=initCaptureGoogleMap"></script>{% endif %}<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script><script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script><script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script><script src="{{ url_for('static',filename='r2-upload.js') }}?v=1"></script><script src="{{ url_for('static',filename='site-setup.js') }}?v=13"></script><script src="{{ url_for('static',filename='site-capture.js') }}?v=13"></script>
+ {% include "_policy_footer.html" %}</body></html>
+diff --git a/tests/test_navigation_sessions.py b/tests/test_navigation_sessions.py
+index 6f7d635..751ee08 100644
+--- a/tests/test_navigation_sessions.py
++++ b/tests/test_navigation_sessions.py
+@@ -57,8 +57,8 @@ class NavigationSessionTests(unittest.TestCase):
+ 
+     def test_company_admin_can_switch_all_pages_without_login(self):
+         client = self.client(self.admin)
+-        for path, label in [('/dashboard','Archive'),('/admin','Admin'),('/admin/upload','Upload'),
+-                            ('/admin/site-capture','Admin')]:
++        for path, label in [('/dashboard','Archive'),('/admin','Admin'),('/admin/upload','Workspace'),
++                            ('/admin/site-capture','Workspace')]:
+             self.check_page(client, path, label)
+         self.assertEqual(client.get('/admin/fieldview-sandbox').status_code, 403)
+         self.assertNotIn(b'fieldview-sandbox', client.get('/admin').data)
+@@ -67,7 +67,7 @@ class NavigationSessionTests(unittest.TestCase):
+ 
+     def test_unscoped_owner_sees_workspace_guide_instead_of_login(self):
+         client = self.client(self.owner)
+-        for path, label in [('/dashboard','Archive'),('/admin','Admin'),('/admin/upload','Upload'),
++        for path, label in [('/dashboard','Archive'),('/admin','Admin'),('/admin/upload','Workspace'),
+                             ('/admin/fieldview-sandbox','Sandbox'),('/owner','Platform Owner')]:
+             html = self.check_page(client, path, label)
+             if path != '/owner':
+@@ -80,7 +80,7 @@ class NavigationSessionTests(unittest.TestCase):
+         for company, visible, hidden in [(self.a,'Only company A','Only company B'), (self.b,'Only company B','Only company A')]:
+             response = client.post('/owner/workspace', data={'_csrf':'navigation-csrf','company_id':company,'next_endpoint':'admin'})
+             self.assertEqual(response.location, '/admin')
+-            for path, label in [('/dashboard','Archive'),('/admin','Admin'),('/admin/upload','Upload')]:
++            for path, label in [('/dashboard','Archive'),('/admin','Admin'),('/admin/upload','Workspace')]:
+                 html = self.check_page(client, path, label)
+                 self.assertIn(visible, html)
+                 self.assertNotIn(hidden, html)
+diff --git a/tests/test_worker_accounts.py b/tests/test_worker_accounts.py
+index ef2280f..fcddeb5 100644
+--- a/tests/test_worker_accounts.py
++++ b/tests/test_worker_accounts.py
+@@ -152,6 +152,11 @@ class WorkerAccountTests(unittest.TestCase):
+         self.assertNotIn('class="worker-mode"', html)
+         self.assertIn('data-capture-view="documents"', html)
+         self.assertIn("Unassigned doc", html)
++        # Admins see the same two tabs as workers, plus the admin-only oversight tools.
++        self.assertIn('class="capture-tab worker-hidden', html)
++        self.assertIn('data-initial-view="videos"', html)
++        self.assertIn('id="site-module-chooser" class="module-picker admin-only"', html)
++        self.assertIn("/admin/site-capture", admin.get("/dashboard").get_data(as_text=True))
+ 
+     def test_other_company_cannot_edit_this_companys_records(self):
+         stranger = self.login("wt-other-admin")
+-- 
+2.43.0
+

@@ -1,0 +1,739 @@
+From 18f5e98f200e311454eafcc3ee903d054b420f1c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Nov 2026 16:12:39 +0000
+Subject: [PATCH 1/2] Add in-app legal pages and policy consent
+
+- New public pages at /legal: Terms of Service, Privacy Policy, Cookie
+  Policy, Plans/Billing & Cancellation, Refund Policy, Copyright & Content,
+  Accessibility. Served by the app so sign-up, checkout and viewer links
+  resolve while the marketing site is private. All 19 existing policy links
+  (footer, sign-up, checkout, viewer, upload notice) now point to them.
+- Billing, refund and retention text follows docs/approved-launch-policies.md
+  (Basic USD399/month or USD4,548.60/year, automatic renewal, cancellation at
+  period end, refund rules, 90-day retrieval). Privacy and cookie text
+  describes current behaviour: one essential session cookie, no analytics or
+  ad trackers, IPs in audit logs, hashed IPs for rate limits, and the
+  processors used (Render, Cloudflare R2, Stripe, email provider, maps).
+- Pages show a 'Draft for owner and legal review' notice until
+  LEGAL_TERMS_APPROVED=1. Operator name, contact, postal address and
+  governing law come from LEGAL_ENTITY_NAME, LEGAL_CONTACT_EMAIL,
+  LEGAL_POSTAL_ADDRESS and LEGAL_GOVERNING_LAW; nothing is hard-coded.
+- Employee and Enterprise invite setup now require accepting the Terms and
+  Privacy Policy and record the accepted versions, as sign-up already does.
+  Account terms and privacy versions bumped to 2026-11-03.
+- Notices on the client code page and the Enterprise request form.
+- Tests: tests/test_legal_pages.py (6). Per-module results match main.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HbptFaAKPeT417LTNgj5bU
+---
+ app.py                             |  70 ++++++++++++++++++--
+ static/legal.css                   |  30 +++++++++
+ templates/_policy_footer.html      |  14 ++--
+ templates/_upload_rights.html      |   2 +-
+ templates/access.html              |   2 +-
+ templates/checkout_review.html     |   2 +-
+ templates/employee_setup.html      |   2 +-
+ templates/enterprise_request.html  |   2 +-
+ templates/enterprise_setup.html    |   2 +-
+ templates/legal/_base.html         |  18 ++++++
+ templates/legal/accessibility.html |  16 +++++
+ templates/legal/billing.html       |  38 +++++++++++
+ templates/legal/cookies.html       |  20 ++++++
+ templates/legal/copyright.html     |  23 +++++++
+ templates/legal/index.html         |   7 ++
+ templates/legal/privacy.html       |  51 +++++++++++++++
+ templates/legal/refunds.html       |  20 ++++++
+ templates/legal/terms.html         |  45 +++++++++++++
+ templates/project_view.html        |   2 +-
+ templates/register.html            |   2 +-
+ tests/test_legal_pages.py          | 100 +++++++++++++++++++++++++++++
+ tests/test_saas_isolation.py       |   2 +
+ 22 files changed, 451 insertions(+), 19 deletions(-)
+ create mode 100644 static/legal.css
+ create mode 100644 templates/legal/_base.html
+ create mode 100644 templates/legal/accessibility.html
+ create mode 100644 templates/legal/billing.html
+ create mode 100644 templates/legal/cookies.html
+ create mode 100644 templates/legal/copyright.html
+ create mode 100644 templates/legal/index.html
+ create mode 100644 templates/legal/privacy.html
+ create mode 100644 templates/legal/refunds.html
+ create mode 100644 templates/legal/terms.html
+ create mode 100644 tests/test_legal_pages.py
+
+diff --git a/app.py b/app.py
+index f3473a5..0c6b49a 100644
+--- a/app.py
++++ b/app.py
+@@ -161,8 +161,9 @@ if app_env == "production":
+ ENTERPRISE_INQUIRY_EMAIL = os.environ.get("ENTERPRISE_INQUIRY_EMAIL", "").strip()
+ STRIPE_API_VERSION = "2026-09-30.endive"
+ BILLING_TERMS_VERSION = "2026-10-25"
+-ACCOUNT_TERMS_VERSION = "2026-10-25"
+-PRIVACY_NOTICE_VERSION = "2026-10-25"
++# Bumped when the published /legal pages were first added to the app.
++ACCOUNT_TERMS_VERSION = "2026-11-03"
++PRIVACY_NOTICE_VERSION = "2026-11-03"
+ 
+ 
+ def stripe_api_key_is_valid(key=None, environment=None):
+@@ -803,6 +804,49 @@ def csrf_token():
+ 
+ app.jinja_env.globals["csrf_token"] = csrf_token
+ 
++# Customer-facing legal pages, served by the app so sign-up, checkout and viewer
++# links always resolve (the marketing site is private until launch). Company
++# details come from the environment; the pages show a draft notice until the
++# Platform Owner sets LEGAL_TERMS_APPROVED=1 after legal review.
++LEGAL_PAGES = {
++    "terms": "Terms of Service",
++    "privacy": "Privacy Policy",
++    "cookies": "Cookie Policy",
++    "billing": "Plans, Billing & Cancellation",
++    "refunds": "Refund Policy",
++    "copyright": "Copyright & Content Policy",
++    "accessibility": "Accessibility Statement",
++}
++
++
++def legal_url(slug):
++    return url_for("legal_page", slug=slug)
++
++
++app.jinja_env.globals["legal_url"] = legal_url
++
++
++def legal_details():
++    return {
++        "entity": os.environ.get("LEGAL_ENTITY_NAME", "").strip() or "Capture IV",
++        "contact_email": os.environ.get("LEGAL_CONTACT_EMAIL", "").strip() or "support@captureiv.com",
++        "postal_address": os.environ.get("LEGAL_POSTAL_ADDRESS", "").strip(),
++        "governing_law": os.environ.get("LEGAL_GOVERNING_LAW", "").strip(),
++        "approved": os.environ.get("LEGAL_TERMS_APPROVED", "0").strip() == "1",
++        "terms_version": ACCOUNT_TERMS_VERSION,
++        "privacy_version": PRIVACY_NOTICE_VERSION,
++        "billing_version": BILLING_TERMS_VERSION,
++        "pages": LEGAL_PAGES,
++    }
++
++
++def record_policy_acceptance(user_id, resource_type, resource_id):
++    db.session.add(AuditLog(user_id=user_id, action="account_terms_accepted",
++        resource_type=resource_type, resource_id=str(resource_id),
++        detail=json.dumps({"terms_version": ACCOUNT_TERMS_VERSION,
++                           "privacy_notice_version": PRIVACY_NOTICE_VERSION}),
++        ip_address=(request.headers.get("X-Forwarded-For", request.remote_addr) or "")[:80]))
++
+ WORKSPACE_PAGES = {"dashboard", "admin", "upload", "site_capture", "fieldview_sandbox"}
+ 
+ 
+@@ -3584,9 +3628,12 @@ def enterprise_setup(token):
+     if request.method == "POST":
+         password = request.form.get("password", "")
+         confirm = request.form.get("confirm_password", "")
+-        if len(password) < 12 or password != confirm:
++        if request.form.get("accept_policies") != "yes":
++            flash("Please agree to the Terms and acknowledge the Privacy Policy to set up your account.", "error")
++        elif len(password) < 12 or password != confirm:
+             flash("Use matching passwords with at least 12 characters.", "error")
+         else:
++            record_policy_acceptance(user.id, "enterprise_setup", membership.company_id)
+             user.set_password(password)
+             user.email_verified = True
+             action.used_at = now_utc()
+@@ -5090,9 +5137,12 @@ def employee_setup(token):
+     if request.method == "POST":
+         password = request.form.get("password", "")
+         confirm = request.form.get("confirm_password", "")
+-        if len(password) < 12 or password != confirm:
++        if request.form.get("accept_policies") != "yes":
++            flash("Please agree to the Terms and acknowledge the Privacy Policy to set up your account.", "error")
++        elif len(password) < 12 or password != confirm:
+             flash("Use matching passwords with at least 12 characters.", "error")
+         else:
++            record_policy_acceptance(user.id, "employee_setup", membership.company_id)
+             user.set_password(password)
+             user.email_verified = True
+             user.active = True
+@@ -5229,6 +5279,18 @@ def delete_document(doc_id):
+ # --------------------------- JSON API ---------------------------
+ # These endpoints let a future React/mobile frontend use the same backend.
+ 
++@app.get("/legal")
++def legal_index():
++    return render_template("legal/index.html", legal=legal_details())
++
++
++@app.get("/legal/<slug>")
++def legal_page(slug):
++    if slug not in LEGAL_PAGES:
++        abort(404)
++    return render_template(f"legal/{slug}.html", legal=legal_details(), title=LEGAL_PAGES[slug], slug=slug)
++
++
+ @app.get("/api/health")
+ def api_health():
+     return jsonify({"status": "ok", "service": "construction-drone-portal", "time_utc": now_utc().isoformat()})
+diff --git a/static/legal.css b/static/legal.css
+new file mode 100644
+index 0000000..0f8ef6a
+--- /dev/null
++++ b/static/legal.css
+@@ -0,0 +1,30 @@
++/* Capture IV legal and policy pages */
++:root { --ink: #0b1530; --text: #334155; --muted: #64748b; --line: #dbe3ef; --blue: #2563eb; --bg: #f5f7fb; }
++* { box-sizing: border-box; }
++body.legal-page { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.65 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
++.skip-link { position: absolute; left: -9999px; top: 8px; padding: 8px 12px; background: #fff; color: var(--ink); border-radius: 8px; }
++.skip-link:focus { left: 12px; z-index: 10; }
++a { color: var(--blue); }
++.legal-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; padding: 18px clamp(16px, 4vw, 48px); background: #fff; border-bottom: 1px solid var(--line); }
++.legal-brand { color: var(--ink); font: 800 20px/1 Manrope, Inter, system-ui, sans-serif; letter-spacing: -.03em; text-decoration: none; }
++.legal-brand span { color: var(--blue); }
++.legal-top nav { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; }
++.legal-top nav a { color: var(--text); text-decoration: none; }
++.legal-top nav a[aria-current="page"] { color: var(--blue); font-weight: 600; }
++.legal-main { max-width: 820px; margin: 0 auto; padding: clamp(24px, 5vw, 56px) 16px 64px; }
++.legal-draft { margin: 0 0 20px; padding: 12px 16px; border: 1px solid #f3d38b; border-radius: 12px; background: #fff8e6; color: #6b4e09; font-size: 14px; }
++.legal-doc { padding: clamp(20px, 4vw, 44px); border: 1px solid var(--line); border-radius: 16px; background: #fff; }
++.legal-eyebrow { margin: 0 0 6px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
++.legal-doc h1 { margin: 0 0 6px; color: var(--ink); font: 800 clamp(28px, 4vw, 38px)/1.15 Manrope, Inter, system-ui, sans-serif; letter-spacing: -.02em; }
++.legal-meta { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
++.legal-doc h2 { margin: 28px 0 8px; color: var(--ink); font-size: 19px; }
++.legal-doc ul, .legal-doc ol { padding-left: 22px; }
++.legal-doc li { margin: 4px 0; }
++.legal-table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 15px; }
++.legal-table th, .legal-table td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
++.legal-table th { background: #f1f5fb; color: var(--ink); }
++.legal-contact { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line); }
++.legal-list li { margin: 8px 0; }
++.legal-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; padding: 24px 16px 40px; font-size: 14px; }
++.legal-foot a { color: var(--muted); }
++@media (max-width: 600px) { .legal-table, .legal-table tbody, .legal-table tr, .legal-table td { display: block; width: 100%; } .legal-table thead { display: none; } .legal-table td { border-top: 0; } .legal-table tr { border-top: 1px solid var(--line); } }
+diff --git a/templates/_policy_footer.html b/templates/_policy_footer.html
+index 5a3e31b..631903b 100644
+--- a/templates/_policy_footer.html
++++ b/templates/_policy_footer.html
+@@ -1,10 +1,10 @@
+ <footer class="platform-policy-links" aria-label="Legal and company information">
+-  <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/privacy">Privacy</a>
+-  <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/terms">Terms</a>
+-  <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/cookies">Cookies</a>
+-  <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/billing">Billing &amp; cancellation</a>
+-  <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/refunds">Refunds</a>
+-  <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/copyright">Copyright &amp; content</a>
+-  <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/accessibility">Accessibility</a>
++  <a href="{{ legal_url('privacy') }}">Privacy</a>
++  <a href="{{ legal_url('terms') }}">Terms</a>
++  <a href="{{ legal_url('cookies') }}">Cookies</a>
++  <a href="{{ legal_url('billing') }}">Billing &amp; cancellation</a>
++  <a href="{{ legal_url('refunds') }}">Refunds</a>
++  <a href="{{ legal_url('copyright') }}">Copyright &amp; content</a>
++  <a href="{{ legal_url('accessibility') }}">Accessibility</a>
+   <span>Capture IV · <a href="mailto:support@captureiv.com">support@captureiv.com</a></span>
+ </footer>
+diff --git a/templates/_upload_rights.html b/templates/_upload_rights.html
+index 24f3412..d05bbf7 100644
+--- a/templates/_upload_rights.html
++++ b/templates/_upload_rights.html
+@@ -1 +1 @@
+-<p class="upload-rights-note">Upload and share only footage, photos and documents you own or have permission to use. Check client and project confidentiality requirements. <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/copyright">Copyright &amp; content guidance</a></p>
+\ No newline at end of file
++<p class="upload-rights-note">Upload and share only footage, photos and documents you own or have permission to use. Check client and project confidentiality requirements. <a href="{{ legal_url('copyright') }}">Copyright &amp; content guidance</a></p>
+\ No newline at end of file
+diff --git a/templates/access.html b/templates/access.html
+index f24fb98..aa65565 100644
+--- a/templates/access.html
++++ b/templates/access.html
+@@ -1,3 +1,3 @@
+ <!doctype html>
+ <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Project Viewer · Capture IV</title><link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}?v=20261026-a11y"></head>
+-<body class="access-page"><a class="skip-link" href="#main-content">Skip to main content</a><header class="access-top"><a class="skybrand" href="/"><span class="sky-icon">△</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></a><a href="{{ url_for('login') }}" class="access-login">Project Admin <span>♙</span></a></header><main id="main-content" class="access-content"><section class="access-card"><p class="eyebrow">PROJECT VIEWER</p><h1>Welcome to your<br>project site.</h1><p class="access-intro">{% if project_name %}Enter the 4-letter code shared with you to access {{ project_name }}.{% else %}Enter the 4-letter project access code<br>to view site footage and updates.{% endif %}</p>{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="access-error">{{ message }}</div>{% endfor %}{% endwith %}<form method="post" class="access-form"{% if share_token %} action="{{ url_for('shared_project',token=share_token) }}"{% endif %}><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="next_tab" value="{{ next_tab or 'map' }}"><label class="sr-only" for="access-code">Four-letter project access code</label><input class="code-entry" id="access-code" name="code" maxlength="4" minlength="4" autocomplete="one-time-code" placeholder="A  B  C  D" autocapitalize="characters" required><button class="access-submit">Access Project <span>→</span></button></form><div class="or-rule"><span>or</span></div><a class="project-info-link" href="{{ url_for('login') }}">♧ &nbsp; Project team sign in</a></section><div class="access-caption">Real Context.<br>Better Decisions.<i></i></div></main><footer class="access-footer"><div><strong>CAPTURE IV</strong><span>Intelligence Visuals</span></div><div><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/privacy">Privacy</a><b></b><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/terms">Terms</a><b></b><a href="mailto:support@captureiv.com">Support</a></div></footer></body></html>
++<body class="access-page"><a class="skip-link" href="#main-content">Skip to main content</a><header class="access-top"><a class="skybrand" href="/"><span class="sky-icon">△</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></a><a href="{{ url_for('login') }}" class="access-login">Project Admin <span>♙</span></a></header><main id="main-content" class="access-content"><section class="access-card"><p class="eyebrow">PROJECT VIEWER</p><h1>Welcome to your<br>project site.</h1><p class="access-intro">{% if project_name %}Enter the 4-letter code shared with you to access {{ project_name }}.{% else %}Enter the 4-letter project access code<br>to view site footage and updates.{% endif %}</p>{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="access-error">{{ message }}</div>{% endfor %}{% endwith %}<form method="post" class="access-form"{% if share_token %} action="{{ url_for('shared_project',token=share_token) }}"{% endif %}><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="next_tab" value="{{ next_tab or 'map' }}"><label class="sr-only" for="access-code">Four-letter project access code</label><input class="code-entry" id="access-code" name="code" maxlength="4" minlength="4" autocomplete="one-time-code" placeholder="A  B  C  D" autocapitalize="characters" required><button class="access-submit">Access Project <span>→</span></button></form><p class="access-legal">By opening a project you agree to the <a href="{{ legal_url('terms') }}">Terms of Service</a> and acknowledge the <a href="{{ legal_url('privacy') }}">Privacy Policy</a>.</p><div class="or-rule"><span>or</span></div><a class="project-info-link" href="{{ url_for('login') }}">♧ &nbsp; Project team sign in</a></section><div class="access-caption">Real Context.<br>Better Decisions.<i></i></div></main><footer class="access-footer"><div><strong>CAPTURE IV</strong><span>Intelligence Visuals</span></div><div><a href="{{ legal_url('privacy') }}">Privacy</a><b></b><a href="{{ legal_url('terms') }}">Terms</a><b></b><a href="mailto:support@captureiv.com">Support</a></div></footer></body></html>
+diff --git a/templates/checkout_review.html b/templates/checkout_review.html
+index fc3f4e2..aa0f11d 100644
+--- a/templates/checkout_review.html
++++ b/templates/checkout_review.html
+@@ -34,7 +34,7 @@
+     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+     <p class="checkout-renewal-notice" id="renewal-disclosure"><strong>Automatic renewal:</strong> {% if renewal_amount_cents is not none %}${{ '%.2f'|format(renewal_amount_cents / 100) }} per company per {{ renewal_interval }}{% else %}The amount in your order summary per {{ renewal_interval }}{% endif %}, until cancelled. Cancel through <strong>Billing</strong> in your company account before the next renewal. Cancellation takes effect at the end of the paid period.</p>
+     <label class="checkout-accept"><input type="checkbox" name="accept_billing_terms" value="yes" required aria-describedby="renewal-disclosure"><span>I expressly agree to automatic recurring billing at the amount and interval above, and to the billing, cancellation and refund terms shown here.</span></label>
+-    <p class="fineprint"><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/billing" target="_blank" rel="noopener">Billing &amp; cancellation details</a> · <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/terms" target="_blank" rel="noopener">Terms</a> · <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/privacy" target="_blank" rel="noopener">Privacy</a> · Terms version {{ billing_terms_version }}. Save or print this page for your records.</p>
++    <p class="fineprint"><a href="{{ legal_url('billing') }}" target="_blank" rel="noopener">Billing &amp; cancellation details</a> · <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms</a> · <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy</a> · Terms version {{ billing_terms_version }}. Save or print this page for your records.</p>
+     <button type="submit" class="button primary full">Continue to secure payment →</button>
+   </form>
+   {% else %}
+diff --git a/templates/employee_setup.html b/templates/employee_setup.html
+index 4669c2e..10acaba 100644
+--- a/templates/employee_setup.html
++++ b/templates/employee_setup.html
+@@ -1,3 +1,3 @@
+ {% extends 'base.html' %}{% block title %}Set up your Capture IV account{% endblock %}{% block content %}
+-<section class="login-card saas-card"><div class="brand large"><span class="brand-mark">C</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></div><p class="eyebrow">TEAM INVITATION</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. This invitation can only be used once.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><button class="button primary full">Create account →</button></form></section>
++<section class="login-card saas-card"><div class="brand large"><span class="brand-mark">C</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></div><p class="eyebrow">TEAM INVITATION</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. This invitation can only be used once.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label><button class="button primary full">Create account →</button></form></section>
+ {% endblock %}
+diff --git a/templates/enterprise_request.html b/templates/enterprise_request.html
+index 1830a74..7b4760e 100644
+--- a/templates/enterprise_request.html
++++ b/templates/enterprise_request.html
+@@ -1,3 +1,3 @@
+ {% extends 'base.html' %}{% block title %}Request enterprise pricing{% endblock %}{% block content %}
+-<section class="login-card saas-card"><p class="eyebrow">ENTERPRISE</p><h1>Request custom pricing</h1><p class="muted">Tell us about your organization. Requests are reviewed by the Platform Owner and are never auto-approved.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Company name<input name="company_name" maxlength="180" required></label><label>Contact name<input name="contact_name" maxlength="160" required></label><label>Work email<input type="email" name="email" maxlength="254" required></label><label>Phone<input name="phone" type="tel" maxlength="40"></label><div class="saas-name-row"><label>Estimated projects<input name="estimated_projects" maxlength="80" value="{{ request.args.get('projects','') }}"></label><label>Estimated users<input name="estimated_users" maxlength="80" value="{{ request.args.get('team','') }}"></label></div><label>Estimated storage<input name="estimated_storage" maxlength="80" placeholder="e.g. 2 TB"></label><label>Additional comments<textarea name="comments" maxlength="5000" rows="4">{% if request.args.get('billing') %}Interested in {{ request.args.get('billing') }} billing.{% endif %}</textarea></label><div class="website-field" aria-hidden="true"><label>Website<input name="website" tabindex="-1" autocomplete="off"></label></div><button class="button primary full">Send request →</button></form></section>
++<section class="login-card saas-card"><p class="eyebrow">ENTERPRISE</p><h1>Request custom pricing</h1><p class="muted">Tell us about your organization. Requests are reviewed by the Platform Owner and are never auto-approved.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Company name<input name="company_name" maxlength="180" required></label><label>Contact name<input name="contact_name" maxlength="160" required></label><label>Work email<input type="email" name="email" maxlength="254" required></label><label>Phone<input name="phone" type="tel" maxlength="40"></label><div class="saas-name-row"><label>Estimated projects<input name="estimated_projects" maxlength="80" value="{{ request.args.get('projects','') }}"></label><label>Estimated users<input name="estimated_users" maxlength="80" value="{{ request.args.get('team','') }}"></label></div><label>Estimated storage<input name="estimated_storage" maxlength="80" placeholder="e.g. 2 TB"></label><label>Additional comments<textarea name="comments" maxlength="5000" rows="4">{% if request.args.get('billing') %}Interested in {{ request.args.get('billing') }} billing.{% endif %}</textarea></label><div class="website-field" aria-hidden="true"><label>Website<input name="website" tabindex="-1" autocomplete="off"></label></div><p class="fineprint">We use these details to review your request and contact you, as described in our <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</p><button class="button primary full">Send request →</button></form></section>
+ {% endblock %}
+diff --git a/templates/enterprise_setup.html b/templates/enterprise_setup.html
+index d09fb6b..e1d9e0f 100644
+--- a/templates/enterprise_setup.html
++++ b/templates/enterprise_setup.html
+@@ -1,3 +1,3 @@
+ {% extends 'base.html' %}{% block title %}Set up Enterprise access{% endblock %}{% block content %}
+-<section class="login-card saas-card"><p class="eyebrow">ENTERPRISE ACCOUNT</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. Your workspace stays pending until the subscription payment is confirmed.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><button class="button primary full">Continue to secure checkout →</button></form></section>
++<section class="login-card saas-card"><p class="eyebrow">ENTERPRISE ACCOUNT</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. Your workspace stays pending until the subscription payment is confirmed.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label><button class="button primary full">Continue to secure checkout →</button></form></section>
+ {% endblock %}
+diff --git a/templates/legal/_base.html b/templates/legal/_base.html
+new file mode 100644
+index 0000000..ee42421
+--- /dev/null
++++ b/templates/legal/_base.html
+@@ -0,0 +1,18 @@
++<!doctype html>
++<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
++<title>{{ title or 'Legal' }} · Capture IV</title>
++<link rel="stylesheet" href="{{ url_for('static', filename='legal.css') }}?v=1"></head>
++<body class="legal-page"><a class="skip-link" href="#main-content">Skip to main content</a>
++<header class="legal-top"><a class="legal-brand" href="{{ url_for('index') }}">Capture <span>IV</span></a>
++<nav aria-label="Legal pages">{% for key, name in legal.pages.items() %}<a href="{{ legal_url(key) }}"{% if slug == key %} aria-current="page"{% endif %}>{{ name.split(' ')[0] if key != 'billing' else 'Billing' }}</a>{% endfor %}</nav></header>
++<main id="main-content" class="legal-main">
++{% if not legal.approved %}<aside class="legal-draft" role="note"><strong>Draft for owner and legal review.</strong> This page describes how Capture IV works today and the policies the Platform Owner has approved so far. It has not yet been approved as final legal terms.</aside>{% endif %}
++<article class="legal-doc">
++<p class="legal-eyebrow">Capture IV{% if legal.entity != "Capture IV" %} · {{ legal.entity }}{% endif %}</p>
++<h1>{{ title }}</h1>
++{% block meta %}<p class="legal-meta">Version {{ legal.terms_version }}</p>{% endblock %}
++{% block body %}{% endblock %}
++<section class="legal-contact"><h2>Contact</h2><p>Questions about this page: <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a>{% if legal.postal_address %} · {{ legal.postal_address }}{% endif %}</p></section>
++</article></main>
++<footer class="legal-foot">{% for key, name in legal.pages.items() %}<a href="{{ legal_url(key) }}">{{ name }}</a>{% endfor %}</footer>
++</body></html>
+diff --git a/templates/legal/accessibility.html b/templates/legal/accessibility.html
+new file mode 100644
+index 0000000..28c01aa
+--- /dev/null
++++ b/templates/legal/accessibility.html
+@@ -0,0 +1,16 @@
++{% extends "legal/_base.html" %}
++{% block body %}
++<p>We want Capture IV to be usable by everyone who works on or follows a construction project, including people who use assistive technology.</p>
++
++<h2>What we do</h2>
++<ul>
++<li>Pages include a "Skip to main content" link, labelled form fields and buttons, and keyboard-operable controls.</li>
++<li>We test changes against common accessibility guidance and fix issues we find.</li>
++</ul>
++
++<h2>Known limitations</h2>
++<p>Some map, drawing and video features are highly visual and may be harder to use with a screen reader or keyboard alone. Where you need project information in another format, your project team or our support team can help.</p>
++
++<h2>Feedback</h2>
++<p>If something is difficult to use, tell us at <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a> with the page and what you were trying to do. We aim to respond and work on a fix or an alternative.</p>
++{% endblock %}
+diff --git a/templates/legal/billing.html b/templates/legal/billing.html
+new file mode 100644
+index 0000000..cf44044
+--- /dev/null
++++ b/templates/legal/billing.html
+@@ -0,0 +1,38 @@
++{% extends "legal/_base.html" %}
++{% block meta %}<p class="legal-meta">Billing terms version {{ legal.billing_version }}</p>{% endblock %}
++{% block body %}
++<p>This page explains Capture IV plans, how payment and automatic renewal work, how to cancel, and what happens to your files when a subscription ends.</p>
++
++<h2>Plans</h2>
++<table class="legal-table"><thead><tr><th>Plan</th><th>Price</th><th>Includes</th></tr></thead><tbody>
++<tr><td><strong>Basic</strong></td><td>USD 399.00 per company per month, or USD 4,548.60 per company per year (5% below twelve monthly payments)</td><td>One company workspace, one active construction project, two authenticated company accounts, 1 TB total storage, and unlimited authorized client viewers.</td></tr>
++<tr><td><strong>Enterprise</strong></td><td>Custom</td><td>Scope, capacity, storage and pricing agreed separately in writing.</td></tr>
++</tbody></table>
++<p>1 TB means 1,000,000,000,000 bytes of total stored files at any time. It is not a monthly upload allowance. Uploads that would go over your plan's storage are refused. No paid storage add-ons are offered.</p>
++
++<h2>Payment</h2>
++<p>Payments are processed by Stripe on Stripe's secure checkout page. Before checkout we show the plan, price, billing interval and these terms, and ask you to agree to automatic recurring billing. We keep a record of that agreement.</p>
++
++<h2>Automatic renewal</h2>
++<p>Subscriptions renew automatically at the price and interval you chose, on the subscription's billing date, until cancelled.</p>
++
++<h2>Cancelling</h2>
++<ul>
++<li>A company administrator can cancel from <strong>Billing</strong> in the company account before the next renewal.</li>
++<li>Cancellation stops the next renewal. It takes effect at the end of the current paid billing period, and the company keeps paid access until then.</li>
++<li>A scheduled cancellation can be reversed before the paid period ends, where Stripe allows it.</li>
++<li>Cancelling does not delete workspace data.</li>
++</ul>
++<p>Refunds are covered in the <a href="{{ legal_url('refunds') }}">Refund Policy</a>.</p>
++
++<h2>After a subscription ends: 90-day file retrieval</h2>
++<ul>
++<li>For 90 days after paid access ends, an active company administrator can sign in and download the company's existing files.</li>
++<li>During this window uploads, edits, project changes and client sharing are unavailable, and employee accounts and client viewers do not get retrieval access.</li>
++<li>A security suspension by Capture IV overrides the retrieval window.</li>
++<li>Download your own copies before the deadline. Retention after the 90 days is not guaranteed.</li>
++</ul>
++
++<h2>Enterprise</h2>
++<p>Enterprise pricing, scope and terms are set in a separate written agreement, which takes priority over this page where they differ.</p>
++{% endblock %}
+diff --git a/templates/legal/cookies.html b/templates/legal/cookies.html
+new file mode 100644
+index 0000000..7141256
+--- /dev/null
++++ b/templates/legal/cookies.html
+@@ -0,0 +1,20 @@
++{% extends "legal/_base.html" %}
++{% block meta %}<p class="legal-meta">Version {{ legal.privacy_version }}</p>{% endblock %}
++{% block body %}
++<p>Capture IV uses only the cookie needed to run the platform securely. We do not use advertising or analytics cookies.</p>
++
++<h2>Cookie we set</h2>
++<table class="legal-table"><thead><tr><th>Name</th><th>Purpose</th><th>Duration</th></tr></thead>
++<tbody><tr><td><code>session</code></td><td>Keeps you signed in, protects forms against cross-site request forgery, and remembers that you unlocked a shared project with its code.</td><td>Ends when you close your browser or sign out.</td></tr></tbody></table>
++<p>This cookie is strictly necessary: the platform cannot work without it, so it is not optional. It is marked HttpOnly and SameSite, and is sent only over secure connections in production.</p>
++
++<h2>Third-party services</h2>
++<p>Some pages load content from other providers, which may set or read their own cookies under their own policies:</p>
++<ul>
++<li><strong>Maps:</strong> Google Maps, and map tiles or libraries from OpenStreetMap, Esri and unpkg, on project map pages.</li>
++<li><strong>Payments:</strong> Stripe, when you go to Stripe's checkout or billing pages.</li>
++</ul>
++
++<h2>Managing cookies</h2>
++<p>You can block or delete cookies in your browser settings. If you block the <code>session</code> cookie you will not be able to sign in or open shared projects.</p>
++{% endblock %}
+diff --git a/templates/legal/copyright.html b/templates/legal/copyright.html
+new file mode 100644
+index 0000000..c0687cb
+--- /dev/null
++++ b/templates/legal/copyright.html
+@@ -0,0 +1,23 @@
++{% extends "legal/_base.html" %}
++{% block body %}
++<h2>Upload only what you have rights to</h2>
++<p>Companies may upload and share only footage, photos, maps and documents they own or have permission to use. Before sharing, check client and project confidentiality requirements and any rules about recording people or private property.</p>
++
++<h2>Reporting infringing content</h2>
++<p>If you believe material on Capture IV infringes your copyright, send a written notice to <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a> with:</p>
++<ol>
++<li>your name and contact details, including an email address;</li>
++<li>a description of the copyrighted work you believe is infringed;</li>
++<li>where the material appears, such as the project link or file name, if you know it;</li>
++<li>a statement that you believe in good faith the use is not authorized by the owner, its agent or the law;</li>
++<li>a statement that the information in your notice is accurate and, under penalty of perjury, that you are the owner or authorized to act for the owner;</li>
++<li>your physical or electronic signature.</li>
++</ol>
++<p>We review notices and may remove or disable access to material and notify the company that uploaded it. Company content is private to each company and its invited viewers, so please include enough detail for us to locate it.</p>
++
++<h2>Counter-notices</h2>
++<p>If your content was removed and you believe that was a mistake or that you have permission to use it, contact us at the same address with your details, the material removed, and why you believe it was removed in error.</p>
++
++<h2>Repeat infringement</h2>
++<p>We may suspend or close accounts that repeatedly upload infringing material.</p>
++{% endblock %}
+diff --git a/templates/legal/index.html b/templates/legal/index.html
+new file mode 100644
+index 0000000..9aa1c22
+--- /dev/null
++++ b/templates/legal/index.html
+@@ -0,0 +1,7 @@
++{% extends "legal/_base.html" %}
++{% set title = "Legal & policies" %}
++{% block meta %}{% endblock %}
++{% block body %}
++<p>These pages explain the terms for using Capture IV, how we handle personal information, the cookies we use, and how plans, billing, refunds and content work.</p>
++<ul class="legal-list">{% for key, name in legal.pages.items() %}<li><a href="{{ legal_url(key) }}">{{ name }}</a></li>{% endfor %}</ul>
++{% endblock %}
+diff --git a/templates/legal/privacy.html b/templates/legal/privacy.html
+new file mode 100644
+index 0000000..8bec11b
+--- /dev/null
++++ b/templates/legal/privacy.html
+@@ -0,0 +1,51 @@
++{% extends "legal/_base.html" %}
++{% block meta %}<p class="legal-meta">Version {{ legal.privacy_version }}</p>{% endblock %}
++{% block body %}
++<p>This Privacy Policy explains what personal information Capture IV, operated by {{ legal.entity }}, handles, why, and the choices you have. It covers company accounts, employees, client viewers and visitors to the platform.</p>
++
++<h2>Information we handle</h2>
++<ul>
++<li><strong>Account details:</strong> name, username, work email, company name and role, and a protected (hashed) password. We never store plain-text passwords.</li>
++<li><strong>Customer Content:</strong> footage, photos, maps, flight paths, site boundaries and documents that companies upload. These can show people, vehicles or property, and may include location data. Each company controls its own Customer Content.</li>
++<li><strong>Billing details:</strong> plan, billing interval, subscription status and payment records. Card details are entered on Stripe's checkout page and are handled by Stripe; we do not receive or store full card numbers.</li>
++<li><strong>Security and activity records:</strong> sign-ins, administrative actions, sharing changes and downloads, including the IP address of the request and the time. For limiting repeated sign-in and code attempts we store only a one-way (hashed) value derived from the IP address.</li>
++<li><strong>Client viewer access:</strong> when you open a shared project we record that access was granted in a session cookie (see the <a href="{{ legal_url('cookies') }}">Cookie Policy</a>). Client viewers do not create an account.</li>
++<li><strong>Messages:</strong> details you send through enterprise or contact requests.</li>
++</ul>
++
++<h2>How we use it</h2>
++<ul>
++<li>to provide the service: accounts, projects, sharing, storage and playback;</li>
++<li>to keep the service and each company's data secure and separate, and to investigate misuse;</li>
++<li>to handle subscriptions, billing records and refund requests;</li>
++<li>to send service email such as verification, password reset, invitations and access-code updates;</li>
++<li>to meet legal, accounting and record-keeping obligations.</li>
++</ul>
++<p>We do not sell personal information and we do not use advertising or analytics trackers on the platform.</p>
++
++<h2>Service providers</h2>
++<p>We use providers that process information for us to run the service:</p>
++<ul>
++<li><strong>Hosting:</strong> Render (application and database).</li>
++<li><strong>File storage:</strong> Cloudflare R2, in a private bucket.</li>
++<li><strong>Payments:</strong> Stripe.</li>
++<li><strong>Email delivery:</strong> our email sending provider.</li>
++<li><strong>Maps:</strong> Google Maps, plus map tiles and libraries loaded from OpenStreetMap, Esri and unpkg. When a map loads, your browser contacts these providers directly, so they receive your IP address and browser details under their own privacy policies.</li>
++</ul>
++<p>We may also disclose information if required by law, to protect rights and safety, or as part of a business transfer under equivalent protections.</p>
++
++<h2>How long we keep it</h2>
++<p>Account, billing and security records are kept while an account is active and afterwards as needed for security, billing, legal and accounting purposes. After a paid subscription ends, the company's administrator can download existing files for 90 days, as described in <a href="{{ legal_url('billing') }}">Plans, Billing &amp; Cancellation</a>. We do not promise indefinite retention, and files are not deleted automatically at the end of that window; deletion follows a reviewed process. Companies can ask us to delete their data.</p>
++
++<h2>Security</h2>
++<p>Customer files are stored privately and served only to signed-in members of the owning company, or to client viewers who have that project's link and code. Each company's data is kept separate from other companies'. No system is perfectly secure; tell us at <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a> if you notice a problem.</p>
++
++<h2>Your choices and rights</h2>
++<p>You can ask to access, correct or delete your personal information, or ask questions about how it is used, by emailing <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a>. If you are an employee or client viewer of a company, we may refer requests about that company's Customer Content to the company, since it controls that content. We respond as required by the laws that apply to you.</p>
++
++<h2>Children</h2>
++<p>Capture IV is a business service and is not intended for children.</p>
++
++<h2>Changes</h2>
++<p>We will post updates to this policy here with a new version date, and notify company administrators of material changes.</p>
++{% endblock %}
+diff --git a/templates/legal/refunds.html b/templates/legal/refunds.html
+new file mode 100644
+index 0000000..368734c
+--- /dev/null
++++ b/templates/legal/refunds.html
+@@ -0,0 +1,20 @@
++{% extends "legal/_base.html" %}
++{% block meta %}<p class="legal-meta">Billing terms version {{ legal.billing_version }}</p>{% endblock %}
++{% block body %}
++<h2>Monthly Basic</h2>
++<p>Monthly payments are not refunded automatically, including for a partly used month, except where the law requires a refund or we approve an exception.</p>
++
++<h2>Annual Basic</h2>
++<ul>
++<li>A company administrator can submit an early-cancellation and refund-review request from <strong>Billing</strong> in the company account.</li>
++<li>Each request is reviewed by Capture IV staff, who may approve a full or partial refund, decline it, or ask for more information. No prorated formula or refund is guaranteed.</li>
++<li>Submitting a request does not cancel the subscription, pause access or issue a refund by itself. Cancelling renewal is a separate step.</li>
++<li>Approved refunds are paid back through Stripe to the original payment method.</li>
++</ul>
++
++<h2>Enterprise</h2>
++<p>Refunds for Enterprise plans follow the separate Enterprise agreement.</p>
++
++<h2>Questions</h2>
++<p>For billing questions, email <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a>. See also <a href="{{ legal_url('billing') }}">Plans, Billing &amp; Cancellation</a>.</p>
++{% endblock %}
+diff --git a/templates/legal/terms.html b/templates/legal/terms.html
+new file mode 100644
+index 0000000..947cf9c
+--- /dev/null
++++ b/templates/legal/terms.html
+@@ -0,0 +1,45 @@
++{% extends "legal/_base.html" %}
++{% block body %}
++<p>These Terms of Service ("Terms") govern use of Capture IV, a platform operated by {{ legal.entity }} ("we", "us") for storing, organizing, displaying and sharing construction-project media such as drone footage, site photos, maps, flight paths and project documents. By creating an account, accepting an invitation, or opening a shared project, you agree to these Terms.</p>
++
++<h2>1. Accounts and roles</h2>
++<ul>
++<li><strong>Company accounts.</strong> A company (for example, a contractor) has a workspace managed by one or more company administrators, who invite employees and control projects, files, client sharing and billing for that workspace.</li>
++<li><strong>Employees.</strong> Employee accounts act for their company and only see projects their company assigns to them.</li>
++<li><strong>Client viewers.</strong> People given a project link and access code by a company can view, and where the company permits, download that project's shared media. Client viewers cannot edit projects.</li>
++<li><strong>Platform staff.</strong> Our staff administer the platform, including account status, plans and security.</li>
++</ul>
++<p>You must give accurate account information and keep passwords, project links and access codes confidential. You are responsible for activity under your account. Tell us promptly at <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a> if you suspect unauthorized access.</p>
++
++<h2>2. Your content</h2>
++<p>Your company keeps ownership of the footage, photos, documents and other material it uploads ("Customer Content"). You give us permission to store, process, display and transmit Customer Content only as needed to provide, secure and support the service for your company and the people you share it with.</p>
++<p>Your company decides who receives project links and codes and is responsible for that sharing. Anyone with a project's link and code can view what the company has chosen to share on it.</p>
++
++<h2>3. Acceptable use</h2>
++<p>You may upload and share only material you own or have permission to use. You are responsible for complying with laws that apply to your captures, including aviation and drone rules, privacy and recording laws for people or property shown, and any client or project confidentiality requirements. You must not:</p>
++<ul>
++<li>attempt to access another company's data, accounts or projects, or bypass access codes, rate limits or other security controls;</li>
++<li>upload malware, or use the service to infringe others' rights or for unlawful purposes;</li>
++<li>scrape, overload or disrupt the service, or probe or test its security without our written permission;</li>
++<li>resell or sublicense access to the service except as your plan allows.</li>
++</ul>
++<p>See the <a href="{{ legal_url('copyright') }}">Copyright &amp; Content Policy</a> for how to report content that infringes your rights.</p>
++
++<h2>4. Plans, billing and cancellation</h2>
++<p>Paid plans, automatic renewal, cancellation, refunds and file retrieval after a subscription ends are described in <a href="{{ legal_url('billing') }}">Plans, Billing &amp; Cancellation</a> and the <a href="{{ legal_url('refunds') }}">Refund Policy</a>, which form part of these Terms. Enterprise plans are governed by a separate written agreement where one applies.</p>
++
++<h2>5. Suspension and ending access</h2>
++<p>We may suspend or restrict access to protect the service, other customers or the public, for non-payment, or for serious or repeated breaches of these Terms. Where reasonable we will tell you first. When paid access ends, the file-retrieval window described in <a href="{{ legal_url('billing') }}">Plans, Billing &amp; Cancellation</a> applies; a security suspension can override it. You should keep your own copies of important files.</p>
++
++<h2>6. Service changes</h2>
++<p>We may update features of the service. We will not intentionally remove core paid features during a paid billing period without notice.</p>
++
++<h2>7. Disclaimers and liability</h2>
++<p>The service is provided "as is" and "as available". To the extent the law allows, we do not guarantee that it will be uninterrupted or error-free, and we are not liable for indirect or consequential losses. Nothing in these Terms limits liability that cannot be limited by law. <em>Specific liability limits are subject to final legal review.</em></p>
++
++<h2>8. Changes to these Terms</h2>
++<p>We may update these Terms. We will show the new version on this page and, for material changes, notify company administrators by email or in the app. Continued use after a change takes effect means you accept the updated Terms.</p>
++
++<h2>9. Governing law</h2>
++<p>{% if legal.governing_law %}These Terms are governed by the laws of {{ legal.governing_law }}.{% else %}<em>Governing law and venue are to be confirmed by the Platform Owner.</em>{% endif %}</p>
++{% endblock %}
+diff --git a/templates/project_view.html b/templates/project_view.html
+index cacbb4d..47afbf9 100644
+--- a/templates/project_view.html
++++ b/templates/project_view.html
+@@ -1,6 +1,6 @@
+ <!doctype html>
+ <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ project }} · Capture IV Project Viewer</title><link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}?v=20261026-a11y">{% if tab in ['map','overview'] %}<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">{% endif %}</head>
+-<body class="viewer-page"><a class="skip-link" href="#main-content">Skip to main content</a><aside class="viewer-sidebar"><a class="skybrand side-brand" href="/"><span class="sky-icon">△</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></a><div class="side-project"><div class="project-thumb">⌂</div><strong>{{ project }}</strong><span>Construction project</span></div><nav class="side-nav">{% for key,label,icon in [('map','Map','⌖'),('media','Videos','▧'),('photos','Photos','▣')] %}<a class="{% if tab==key %}selected{% endif %}" href="{{ url_for('shared_project',token=share_token,tab=key) }}"><span>{{ icon }}</span>{{ label }}</a>{% endfor %}</nav><div class="side-bottom"><span class="avatar">PV</span><span>Client Viewer<small>PROJECT VIEW · READ ONLY</small></span></div><nav class="viewer-legal" aria-label="Legal and company information"><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/privacy">Privacy</a><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/terms">Terms</a><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/cookies">Cookies</a><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/accessibility">Accessibility</a></nav></aside><main id="main-content" class="viewer-main"><header class="viewer-header"><div><h1>{{ project }}</h1><nav class="viewer-tabs">{% for key,label in [('map','Map'),('media','Videos'),('photos','Photos')] %}<a class="{% if tab==key %}active{% endif %}" href="{{ url_for('shared_project',token=share_token,tab=key) }}">{{ label }}</a>{% endfor %}</nav></div><div class="header-actions"><label class="viewer-search">⌕ <input id="viewer-search" aria-label="Search project footage" placeholder="Search footage…"></label></div></header>
++<body class="viewer-page"><a class="skip-link" href="#main-content">Skip to main content</a><aside class="viewer-sidebar"><a class="skybrand side-brand" href="/"><span class="sky-icon">△</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></a><div class="side-project"><div class="project-thumb">⌂</div><strong>{{ project }}</strong><span>Construction project</span></div><nav class="side-nav">{% for key,label,icon in [('map','Map','⌖'),('media','Videos','▧'),('photos','Photos','▣')] %}<a class="{% if tab==key %}selected{% endif %}" href="{{ url_for('shared_project',token=share_token,tab=key) }}"><span>{{ icon }}</span>{{ label }}</a>{% endfor %}</nav><div class="side-bottom"><span class="avatar">PV</span><span>Client Viewer<small>PROJECT VIEW · READ ONLY</small></span></div><nav class="viewer-legal" aria-label="Legal and company information"><a href="{{ legal_url('privacy') }}">Privacy</a><a href="{{ legal_url('terms') }}">Terms</a><a href="{{ legal_url('cookies') }}">Cookies</a><a href="{{ legal_url('accessibility') }}">Accessibility</a></nav></aside><main id="main-content" class="viewer-main"><header class="viewer-header"><div><h1>{{ project }}</h1><nav class="viewer-tabs">{% for key,label in [('map','Map'),('media','Videos'),('photos','Photos')] %}<a class="{% if tab==key %}active{% endif %}" href="{{ url_for('shared_project',token=share_token,tab=key) }}">{{ label }}</a>{% endfor %}</nav></div><div class="header-actions"><label class="viewer-search">⌕ <input id="viewer-search" aria-label="Search project footage" placeholder="Search footage…"></label></div></header>
+ {% if tab in ['map','overview'] %}<section class="viewer-workspace"><aside class="date-rail"><h2>Flight Dates</h2>{% for d in dates %}<a class="date-item {% if d==selected_date %}current{% endif %}" href="{{ url_for('shared_project',token=share_token,tab=tab,date=d.isoformat()) }}"><span>{{ d.strftime('%b %d, %Y') }}</span><small>{{ flights|selectattr('date','equalto',d)|list|length }} flights · {{ flight_paths_by_date.get(d.isoformat(), [])|length }} routes</small></a>{% else %}<p class="rail-empty">No flight dates yet.</p>{% endfor %}</aside><section class="site-stage"><div id="viewer-site-map" data-module="{{ site_setup.module }}" data-center-lat="{{ site_setup.center_lat if site_setup.center_lat is not none else map_default_center[0] }}" data-center-lng="{{ site_setup.center_lng if site_setup.center_lng is not none else map_default_center[1] }}" data-zoom="{{ site_setup.zoom or (16 if site_setup.address else 4) }}" data-boundary="{{ site_setup.boundary_json|e }}" data-boundary-name="{{ site_setup.boundary_name|e }}" data-image-url="{% if site_reference and site_setup.module=='image' %}{{ url_for('protected_file',filename=site_reference.filename) }}{% endif %}" data-ortho-url="{% if site_map and site_setup.module=='ortho' %}{{ url_for('protected_file',filename=site_map.filename) }}{% endif %}" data-date="{{ selected_date.isoformat() }}"><div class="stage-toolbar"><span class="stage-label">{{ 'ORTHOMOSAIC' if site_setup.module=='ortho' else ('SITE IMAGE' if site_setup.module=='image' else 'SITE OVERVIEW') }}</span><button type="button" aria-label="Change map layer to satellite" id="viewer-layer-toggle" class="map-toggle" {% if site_setup.module!='map' %}hidden{% endif %}>Satellite</button>{% if dates|length > 1 and site_setup.module=='map' and google_maps_api_key %}<button type="button" id="compare-toggle" class="map-toggle" aria-expanded="false">Compare dates</button>{% endif %}</div><div id="viewer-live-map" aria-label="Interactive project site and flight paths"></div><section id="viewer-compare" class="viewer-compare" hidden aria-label="Compare project routes by date"><div class="compare-controls"><label>First date<select id="compare-date-left" aria-label="First comparison date">{% for d in dates %}<option value="{{ d.isoformat() }}" {% if d==selected_date %}selected{% endif %}>{{ d.strftime('%b %d, %Y') }}</option>{% endfor %}</select></label><label>Compare with<select id="compare-date-right" aria-label="Second comparison date">{% for d in dates %}<option value="{{ d.isoformat() }}" {% if d==compare_date %}selected{% endif %}>{{ d.strftime('%b %d, %Y') }}</option>{% endfor %}</select></label><button type="button" id="compare-close">Close comparison</button></div><div class="compare-maps"><div id="viewer-compare-map-left" aria-label="Map of first selected date"></div><div id="viewer-compare-map-right" aria-label="Map of second selected date"></div></div></section><div id="viewer-map-empty" class="viewer-map-empty" hidden>Project site reference has not been uploaded.</div></div><script id="viewer-flight-paths" type="application/json">{{ flight_paths|tojson }}</script><script id="viewer-flight-paths-by-date" type="application/json">{{ flight_paths_by_date|tojson }}</script><div class="stage-foot">{% if site_setup.boundary_name %}<span class="boundary-name-caption">Site boundary: {{ site_setup.boundary_name }}</span>{% endif %}{% if site_reference %}{{ site_reference.original_filename }}{% else %}{{ site_setup.address or 'Project site' }}{% endif %}</div></section><section class="flight-detail">{% if selected_flight %}<div class="detail-heading"><div><span class="detail-date">{{ selected_flight.date.strftime('%b %d, %Y') }}</span><h2>{{ selected_flight.title }}</h2></div><div class="detail-arrows">{% if day_flights|length>1 %}<a href="{{ url_for('shared_project',token=share_token,tab=tab,date=selected_date.isoformat(),flight=day_flights[(day_flights.index(selected_flight)-1)%day_flights|length].id) }}">‹</a><a href="{{ url_for('shared_project',token=share_token,tab=tab,date=selected_date.isoformat(),flight=day_flights[(day_flights.index(selected_flight)+1)%day_flights|length].id) }}">›</a>{% endif %}</div></div><div class="detail-pills"><span>{{ selected_flight.status|title }}</span><span>{{ selected_flight.area or project }}</span></div><div class="preview-video"><video controls preload="metadata" src="{{ url_for('protected_file',filename=selected_flight.filename) }}"></video></div><dl class="flight-facts"><div><dt>▣ &nbsp; Date</dt><dd>{{ selected_flight.date.strftime('%b %d, %Y') }}</dd></div>{% if selected_flight.captured_at %}<div><dt>◷ &nbsp; Time</dt><dd>{{ selected_flight.captured_at.strftime('%I:%M %p') }}</dd></div>{% endif %}<div><dt>⌖ &nbsp; Direction</dt><dd>{{ selected_flight.direction }}</dd></div>{% if selected_flight.drone %}<div><dt>⬡ &nbsp; Drone</dt><dd>{{ selected_flight.drone }}</dd></div>{% endif %}{% if selected_flight.area %}<div><dt>⌑ &nbsp; Area</dt><dd>{{ selected_flight.area }}</dd></div>{% endif %}</dl>{% if selected_flight.description %}<p class="detail-description">{{ selected_flight.description }}</p>{% endif %}{% if selected_flight.tag_list %}<div class="detail-tags"><span>Tags</span>{% for tag in selected_flight.tag_list %}<b>{{ tag }}</b>{% endfor %}</div>{% endif %}<div class="detail-actions"><a href="{{ url_for('protected_file',filename=selected_flight.filename,download=1) }}">↓ &nbsp; Download Video</a><button class="outline-share" data-share>↗ &nbsp; Share</button></div>{% else %}<div class="no-flight"><span>▧</span><h2>No footage for this date</h2><p>Project footage will appear here after upload.</p></div>{% endif %}</section><div class="filmstrip"><div class="filmstrip-heading"><strong>Flights on {{ selected_date.strftime('%b %d, %Y') }}</strong><span>{{ day_flights|length }} flights</span><div>{% if dates|length>1 %}<a href="{{ url_for('shared_project',token=share_token,tab=tab,date=dates[(dates.index(selected_date)-1)%dates|length].isoformat()) }}">‹</a><a href="{{ url_for('shared_project',token=share_token,tab=tab,date=dates[(dates.index(selected_date)+1)%dates|length].isoformat()) }}">›</a>{% endif %}</div></div><div class="filmstrip-cards">{% for f in day_flights %}<a class="film-card {% if selected_flight and f.id==selected_flight.id %}chosen{% endif %}" href="{{ url_for('shared_project',token=share_token,tab=tab,date=selected_date.isoformat(),flight=f.id) }}"><div><video muted preload="metadata" src="{{ url_for('protected_file',filename=f.filename) }}#t=1"></video><span>{{ f.duration or f.file_size|filesize }}</span></div><strong>{{ f.title }}</strong><small>{{ f.direction }}</small></a>{% else %}<p class="muted">No flights uploaded for this date.</p>{% endfor %}</div></div></section>
+ {% elif tab=='timeline' %}<section class="content-tab"><p class="eyebrow">PROJECT HISTORY</p><h2>Flight timeline</h2>{% for d in dates %}<a class="timeline-row" href="{{ url_for('shared_project',token=share_token,tab='map',date=d.isoformat()) }}"><b>{{ d.strftime('%b %d, %Y') }}</b><span>{{ flights|selectattr('date','equalto',d)|list|length }} flights</span>View day →</a>{% else %}<p class="muted">No flights have been added yet.</p>{% endfor %}</section>
+ {% elif tab=='photos' %}<section class="content-tab client-photos"><p class="eyebrow">PROJECT SITE PHOTOS</p><h2>Photos &amp; locations</h2>{% if site_reference %}<div class="client-photo-map"><img src="{{ url_for('protected_file',filename=site_reference.filename) }}" alt="{{ project }} site reference image"><svg viewBox="0 0 1000 620" preserveAspectRatio="none" aria-label="Photo coverage areas and locations">{% for area in photo_area_data %}<polygon points="{% for x,y in area.points %}{{ x }},{{ y }} {% endfor %}"/><text x="{{ area.points[0][0] }}" y="{{ area.points[0][1] }}">{{ area.label }}</text>{% endfor %}{% for pin in photo_pin_data %}<circle cx="{{ pin.x }}" cy="{{ pin.y }}" r="12"><title>{{ pin.label }}</title></circle>{% endfor %}</svg></div>{% else %}<p class="muted">A site reference image has not been added yet.</p>{% endif %}<div class="client-photo-grid">{% for pin in photo_pin_data %}{% for photo in pin.photos %}<article class="media-tile"><a href="{{ photo.url }}" target="_blank" rel="noopener"><img src="{{ photo.url }}" alt="{{ photo.name }}" loading="lazy"></a><strong>{{ pin.label }}</strong><span>{{ photo.name }}</span><a class="button secondary small" href="{{ photo.url }}?download=1">Download photo</a></article>{% endfor %}{% else %}<p class="muted">No project photos have been added yet.</p>{% endfor %}</div></section>{% elif tab=='media' %}<section class="content-tab"><p class="eyebrow">CLIENT PROJECT FOOTAGE</p><h2>Drone footage</h2><div class="media-grid">{% for f in flights %}<article class="media-tile"><video controls preload="metadata" aria-label="{{ f.title }}" src="{{ url_for('protected_file',filename=f.filename) }}"></video><strong>{{ f.title }}</strong><span>{{ f.date.strftime('%b %d, %Y') }} · {{ f.direction }}{% if f.area %} · {{ f.area }}{% endif %}</span><a class="button secondary small" href="{{ url_for('protected_file',filename=f.filename,download=1) }}">Download footage</a></article>{% else %}<p class="muted">No footage has been added to this project yet.</p>{% endfor %}</div></section>
+diff --git a/templates/register.html b/templates/register.html
+index a9a1a73..1ac8bb0 100644
+--- a/templates/register.html
++++ b/templates/register.html
+@@ -17,7 +17,7 @@
+     </fieldset>
+     <label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label>
+     <label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label>
+-    <label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/terms" target="_blank" rel="noopener">Terms</a> and acknowledge the <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
++    <label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms</a> and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
+     <button class="button primary full" {% if not plans %}disabled{% endif %}>Create pending account <span>→</span></button>
+   </form>
+   <p class="fineprint">Basic includes one active project, two authenticated company accounts, and 1 TB total storage. No storage add-ons are offered. Only company, work email, and account credentials are required. Name fields are optional. <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/">Back to Capture IV</a></p>
+diff --git a/tests/test_legal_pages.py b/tests/test_legal_pages.py
+new file mode 100644
+index 0000000..287bd90
+--- /dev/null
++++ b/tests/test_legal_pages.py
+@@ -0,0 +1,100 @@
++import os
++os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
++os.environ.setdefault("SECRET_KEY", "test-only-secret")
++
++import json
++import re
++import unittest
++from unittest.mock import patch
++
++import app as portal
++
++
++class LegalPagesTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        portal.app.config.update(TESTING=True)
++        with portal.app.app_context():
++            portal.db.create_all()
++
++    def test_every_policy_page_is_served_by_the_app(self):
++        client = portal.app.test_client()
++        self.assertEqual(client.get("/legal").status_code, 200)
++        for slug, title in portal.LEGAL_PAGES.items():
++            response = client.get(f"/legal/{slug}")
++            self.assertEqual(response.status_code, 200, slug)
++            self.assertIn(title.replace("&", "&amp;").encode(), response.data)
++        self.assertEqual(client.get("/legal/unknown").status_code, 404)
++
++    def test_pages_state_the_approved_billing_and_retention_policies(self):
++        client = portal.app.test_client()
++        billing = client.get("/legal/billing").data
++        for fact in (b"USD 399.00", b"USD 4,548.60", b"90 days", b"renew automatically", b"end of the current paid billing period"):
++            self.assertIn(fact, billing)
++        refunds = client.get("/legal/refunds").data
++        self.assertIn(b"not refunded automatically", refunds)
++        self.assertIn(b"No prorated formula or refund is guaranteed", refunds)
++
++    def test_cookie_policy_lists_only_the_session_cookie(self):
++        page = portal.app.test_client().get("/legal/cookies").data
++        self.assertIn(b"<code>session</code>", page)
++        self.assertIn(b"do not use advertising or analytics cookies", page)
++
++    def test_no_private_company_name_and_draft_notice_until_approved(self):
++        client = portal.app.test_client()
++        for slug in portal.LEGAL_PAGES:
++            page = client.get(f"/legal/{slug}").data
++            self.assertNotIn(b"HERSHEY", page.upper())
++            self.assertIn(b"Draft for owner and legal review", page)
++        with patch.dict(os.environ, {"LEGAL_TERMS_APPROVED": "1", "LEGAL_ENTITY_NAME": "Example Operator LLC",
++                                     "LEGAL_GOVERNING_LAW": "the State of Example"}):
++            page = client.get("/legal/terms").data
++            self.assertNotIn(b"Draft for owner and legal review", page)
++            self.assertIn(b"Example Operator LLC", page)
++            self.assertIn(b"the State of Example", page)
++
++    def test_signup_checkout_and_viewer_links_point_to_app_legal_pages(self):
++        client = portal.app.test_client()
++        for path in ("/register", "/"):
++            html = client.get(path).get_data(as_text=True)
++            self.assertIn("/legal/terms", html, path)
++            self.assertIn("/legal/privacy", html, path)
++            self.assertNotIn("captureiv.com/terms", html, path)
++
++    def test_invited_accounts_must_accept_the_terms(self):
++        with portal.app.app_context():
++            company = portal.Company(name="Legal Consent Co", status="active", storage_limit_bytes=1000)
++            user = portal.User(username="legal-invitee", name="Invitee", email="legal-invitee@example.test",
++                               is_admin=False, active=False, email_verified=False)
++            user.set_password("placeholder-password-123")
++            portal.db.session.add_all([company, user]); portal.db.session.flush()
++            portal.db.session.add(portal.CompanyMembership(company_id=company.id, user_id=user.id,
++                                                           role="employee", status="pending"))
++            portal.db.session.commit()
++            token = "legal-consent-invite-token"
++            portal.db.session.add(portal.EmailActionToken(
++                user_id=user.id, purpose="employee_invite",
++                token_hash=portal.hashlib.sha256(token.encode()).hexdigest(),
++                expires_at=portal.now_utc() + portal.timedelta(days=1)))
++            portal.db.session.commit()
++            user_id = user.id
++        client = portal.app.test_client()
++        page = client.get(f"/employee/setup/{token}")
++        self.assertIn(b'name="accept_policies"', page.data)
++        csrf = re.search(rb'name="_csrf" value="([^"]+)"', page.data).group(1).decode()
++        refused = client.post(f"/employee/setup/{token}", data={"_csrf": csrf, "password": "a-long-password-1",
++                                                                "confirm_password": "a-long-password-1"})
++        self.assertIn(b"Please agree to the Terms", refused.data)
++        accepted = client.post(f"/employee/setup/{token}", data={"_csrf": csrf, "password": "a-long-password-1",
++                                                                 "confirm_password": "a-long-password-1",
++                                                                 "accept_policies": "yes"})
++        self.assertEqual(accepted.status_code, 302)
++        with portal.app.app_context():
++            record = portal.AuditLog.query.filter_by(user_id=user_id, action="account_terms_accepted").one()
++            detail = json.loads(record.detail)
++            self.assertEqual(detail["terms_version"], portal.ACCOUNT_TERMS_VERSION)
++            self.assertEqual(detail["privacy_notice_version"], portal.PRIVACY_NOTICE_VERSION)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_saas_isolation.py b/tests/test_saas_isolation.py
+index a37c176..e74a76a 100644
+--- a/tests/test_saas_isolation.py
++++ b/tests/test_saas_isolation.py
+@@ -406,6 +406,7 @@ class TenantIsolationTests(unittest.TestCase):
+         csrf = re.search(rb'name="_csrf" value="([^"]+)"', invite.data).group(1).decode()
+         completed = employee_client.post(invite_url, data={
+             "_csrf": csrf, "password": "employee-password-123", "confirm_password": "employee-password-123",
++            "accept_policies": "yes",
+         })
+         self.assertEqual(completed.status_code, 302)
+         self.assertTrue(completed.location.endswith("/login"))
+@@ -1359,6 +1360,7 @@ class TenantIsolationTests(unittest.TestCase):
+         setup_csrf = re.search(rb'name="_csrf" value="([^"]+)"', setup.data).group(1).decode()
+         response = client.post(setup_url, data={
+             "_csrf": setup_csrf, "password": "enterprise-password-123", "confirm_password": "enterprise-password-123",
++            "accept_policies": "yes",
+         })
+         self.assertEqual(response.status_code, 302)
+         self.assertIn("/account/checkout/", response.location)
+-- 
+2.43.0
+

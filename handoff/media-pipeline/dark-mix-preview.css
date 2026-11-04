@@ -1,0 +1,42 @@
+/* Dark band: re-points the Light Glass tokens inside a section */
+.dk {
+  --g-ink: #f3f6fb; --g-ink-2: #e2e8f0; --g-text: #a7b2c4; --g-muted: #8a96a9;
+  --g-glass: rgba(255, 255, 255, .05); --g-glass-strong: rgba(255, 255, 255, .08); --g-glass-edge: rgba(255, 255, 255, .10);
+  --g-line: rgba(255, 255, 255, .10); --ink: var(--g-ink); --muted: var(--g-muted); --line: var(--g-line);
+  --g-shadow-sm: 0 1px 0 rgba(255,255,255,.04) inset, 0 10px 30px rgba(0,0,0,.35);
+  --g-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 18px 44px rgba(0,0,0,.4);
+  --g-shadow-lg: 0 40px 100px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.06);
+  position: relative; isolation: isolate; color: var(--g-text);
+}
+.dk::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 50vw); right: calc(50% - 50vw); z-index: -1;
+  background:
+    radial-gradient(50% 60% at 50% 0%, rgba(37, 99, 235, .20) 0, transparent 70%),
+    linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 64px 64px,
+    linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 64px 64px,
+    #111317;
+}
+.dk h1, .dk h2, .dk h3, .dk h4, .dk strong { color: var(--g-ink); }
+.dk p { color: var(--g-text); }
+.dk .eyebrow { background: rgba(255,255,255,.06) !important; border-color: rgba(255,255,255,.12) !important; color: #dbe6ff !important; }
+.dk .text-link { color: #93b4ff; }
+.dk .how-tags li { background: rgba(255, 255, 255, .06); border-color: rgba(255, 255, 255, .12); color: #e2e8f0; }
+.dk .button:not(.signup-button) { }
+/* Dark header */
+.nav.dk-nav, .nav.dk-nav.is-scrolled {
+  background: rgba(17, 19, 23, .84) !important; border-bottom: 1px solid rgba(255, 255, 255, .08) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .25) !important;
+}
+.nav.dk-nav .logo-lockup { color: #fff; }
+.nav.dk-nav .logo-lockup .iv { color: #60a5fa; }
+.nav.dk-nav .nav-links a, .nav.dk-nav .nav-actions .signin-link { color: #c3ccd9; }
+.nav.dk-nav .nav-links a:hover, .nav.dk-nav .nav-actions .signin-link:hover { color: #fff; }
+.nav.dk-nav .nav-links a[aria-current=page] { color: #60a5fa; }
+.nav.dk-nav .nav-actions .button:not(.signup-button), .nav.dk-nav .menu { background: rgba(255, 255, 255, .06); border-color: rgba(255, 255, 255, .14); color: #fff; }
+/* Light glass chips that sit on photos/video keep the light tokens */
+.dk .float-card, .dk .frame-corner, .dk .capture-hud, .dk .product-tour-controls, .dk .how-shot {
+  --g-ink: #0b1530; --g-ink-2: #1e293b; --g-text: #475569; --g-muted: #64748b;
+  --g-glass: rgba(255, 255, 255, .72); --g-glass-strong: rgba(255, 255, 255, .86); --g-glass-edge: rgba(255, 255, 255, .95); --g-line: #dbe3ef;
+}
+.dk .float-card p { color: #475569; }
+.nav.dk-nav .nav-actions .button:not(.signup-button) { background: rgba(255, 255, 255, .06) !important; border-color: rgba(255, 255, 255, .16) !important; color: #fff !important; }

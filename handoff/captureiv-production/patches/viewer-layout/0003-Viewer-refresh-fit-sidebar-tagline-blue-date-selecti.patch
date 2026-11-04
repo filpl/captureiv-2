@@ -1,0 +1,30 @@
+From 1c929f18b4aa79e6dd445fe0876e6e6eb681151d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Nov 2026 17:07:59 +0000
+Subject: [PATCH 3/8] Viewer refresh: fit sidebar tagline, blue date selection
+ and labels
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HbptFaAKPeT417LTNgj5bU
+---
+ static/viewer-refresh.css | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/static/viewer-refresh.css b/static/viewer-refresh.css
+index ab23d19..38a0070 100644
+--- a/static/viewer-refresh.css
++++ b/static/viewer-refresh.css
+@@ -122,3 +122,10 @@ body.viewer-page .viewer-compare { border-radius: 14px; }
+   body.viewer-page .side-project { padding: 0 10px; justify-items: center; }
+   body.viewer-page .side-project strong, body.viewer-page .side-project span { display: none; }
+ }
++
++/* Polish: fit the tagline in the sidebar; blue accents instead of the old beige/green */
++body.viewer-page .viewer-logo-foot .civ-tag { font-size: 6.6px; letter-spacing: .09em; }
++body.viewer-page .date-rail :is(a, button, .date-item, li).selected,
++body.viewer-page .date-rail :is(a, button, .date-item, li).active,
++body.viewer-page .date-rail [aria-current] { background: var(--vr-blue-soft) !important; color: #1d5fd6; border-color: transparent; }
++body.viewer-page .eyebrow { color: #2f6fe0; }
+-- 
+2.43.0
+

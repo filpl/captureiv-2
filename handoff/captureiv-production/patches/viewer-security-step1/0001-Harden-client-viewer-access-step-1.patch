@@ -1,0 +1,432 @@
+From 79bebf20e2244b46b470184fed2ce5e05193f90f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Nov 2026 16:05:28 +0000
+Subject: [PATCH] Harden client viewer access (step 1)
+
+- A project code alone no longer opens a project: it must be entered on the
+  project's share link. The home page and legacy /project/<code> URLs now
+  return the same instruction for every code and never reveal a share link
+  (the legacy route previously redirected a valid code to its link, with no
+  rate limit on GET).
+- Per-link lockout: after 10 wrong codes in an hour, from any number of IP
+  addresses, the link refuses all codes until the window passes. The existing
+  per-IP limit stays in place.
+- Viewer sessions expire after 12 hours; pages and file downloads then ask
+  for the code again. File downloads also require the session's link token.
+- Security headers on every response: nosniff, X-Frame-Options DENY,
+  Referrer-Policy strict-origin-when-cross-origin (Google Maps still receives
+  the app origin for its referrer restriction), Permissions-Policy, and HSTS
+  when secure cookies are on. Viewer pages add noindex and no-store.
+- Tests: new tests/test_viewer_security.py (8 tests); existing tests updated
+  for link+code entry. Per-module results match main (same two pre-existing
+  failures in test_launch_diagnostics and the rate-limit pruning test).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HbptFaAKPeT417LTNgj5bU
+---
+ app.py                        |  95 ++++++++++++++++++----
+ templates/access.html         |   2 +-
+ tests/test_saas_isolation.py  |  31 +++++---
+ tests/test_viewer_security.py | 146 ++++++++++++++++++++++++++++++++++
+ 4 files changed, 246 insertions(+), 28 deletions(-)
+ create mode 100644 tests/test_viewer_security.py
+
+diff --git a/app.py b/app.py
+index f3473a5..dcd6515 100644
+--- a/app.py
++++ b/app.py
+@@ -871,6 +871,27 @@ def protect_private_upload_directory():
+             abort(404)
+ 
+ 
++VIEWER_ENDPOINTS = {"index", "shared_project", "project_view", "protected_file"}
++
++
++@app.after_request
++def apply_security_headers(response):
++    response.headers.setdefault("X-Content-Type-Options", "nosniff")
++    response.headers.setdefault("X-Frame-Options", "DENY")
++    # Cross-origin requests (e.g. Google Maps) receive only the origin, which keeps
++    # share-link tokens out of third-party logs while the Maps referrer restriction
++    # (https://app.captureiv.com/*) still matches.
++    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
++    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), payment=(), usb=()")
++    if app.config.get("SESSION_COOKIE_SECURE"):
++        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
++    if request.endpoint in VIEWER_ENDPOINTS:
++        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
++        if request.endpoint != "protected_file":
++            response.headers["Cache-Control"] = "no-store"
++    return response
++
++
+ @app.before_request
+ def rate_limit_sensitive_routes():
+     if request.method != "POST":
+@@ -1347,6 +1368,45 @@ def viewer_access_active(access):
+                 and (not access.expires_at or access.expires_at > now_utc()))
+ 
+ 
++# Client viewer hardening: access needs the project's share link *and* its code,
++# a link locks for everyone after repeated wrong codes, and an unlocked viewer
++# session lasts a limited time before the code must be entered again.
++VIEWER_SESSION_MAX_AGE = timedelta(hours=12)
++VIEWER_LINK_FAILURE_LIMIT = 10
++VIEWER_LINK_FAILURE_WINDOW = timedelta(hours=1)
++
++
++def grant_viewer_session(access):
++    session["viewer_code"] = access.code
++    session["viewer_token"] = access.share_token
++    session["viewer_granted_at"] = int(now_utc().timestamp())
++
++
++def viewer_session_fresh():
++    try:
++        granted_at = int(session.get("viewer_granted_at"))
++    except (TypeError, ValueError):
++        return False
++    age = now_utc().timestamp() - granted_at
++    return 0 <= age <= VIEWER_SESSION_MAX_AGE.total_seconds()
++
++
++def viewer_link_subject(token):
++    return hashlib.sha256((app.config["SECRET_KEY"] + "|viewer-link|" + token).encode()).hexdigest()
++
++
++def viewer_link_locked(token):
++    cutoff = now_utc() - VIEWER_LINK_FAILURE_WINDOW
++    failures = (RateLimitEvent.query.filter_by(route="viewer-link-failure", subject_hash=viewer_link_subject(token))
++                .filter(RateLimitEvent.created_at >= cutoff).count())
++    return failures >= VIEWER_LINK_FAILURE_LIMIT
++
++
++def record_viewer_link_failure(token):
++    db.session.add(RateLimitEvent(route="viewer-link-failure", subject_hash=viewer_link_subject(token)))
++    db.session.commit()
++
++
+ def normalize_client_emails(value):
+     recipients = []
+     for entry in re.split(r"[\s,;]+", str(value or "").strip()):
+@@ -1891,13 +1951,9 @@ def index():
+     # happens to have an unrelated company account signed in.
+     g.allow_public_viewer_scope = True
+     if request.method == "POST":
+-        code = re.sub(r"[^A-Z]", "", request.form.get("code", "").upper())[:4]
+-        access = ProjectAccess.query.filter_by(code=code).first() if len(code) == 4 else None
+-        if viewer_access_active(access):
+-            session["viewer_code"] = access.code
+-            session["viewer_token"] = access.share_token
+-            return redirect(url_for("shared_project", token=access.share_token))
+-        flash("That project code was not recognized. Check the four letters and try again.", "error")
++        # A code by itself is no longer enough: it must be entered on the
++        # project's own share link. Same reply for any code, valid or not.
++        flash("Open the project link your project team sent you, then enter your 4-letter code there.", "error")
+     return render_template("access.html")
+ 
+ 
+@@ -1910,16 +1966,22 @@ def shared_project(token):
+     if not company_feature_enabled("flight_scans", access.company_id):
+         abort(404)
+     if request.method == "POST":
++        if viewer_link_locked(token):
++            flash("This project link is temporarily locked after too many incorrect codes. "
++                  "Try again later or contact your project team.", "error")
++            return render_template("access.html", share_token=token, link_locked=True,
++                                   next_tab=request.form.get("next_tab", "map"), project_name=access.project), 429
+         submitted = re.sub(r"[^A-Z]", "", request.form.get("code", "").upper())[:4]
+         if len(submitted) != 4 or not secrets.compare_digest(submitted, access.code):
++            record_viewer_link_failure(token)
+             flash("That project code was not recognized. Check the four letters and try again.", "error")
+             return render_template("access.html", share_token=token,
+                                    next_tab=request.form.get("next_tab", "map"), project_name=access.project)
+-        session["viewer_code"] = access.code
+-        session["viewer_token"] = access.share_token
++        grant_viewer_session(access)
+         return redirect(url_for("shared_project", token=token,
+                                 tab=request.form.get("next_tab", "map")))
+-    if session.get("viewer_code") != access.code or session.get("viewer_token") != access.share_token:
++    if (session.get("viewer_code") != access.code or session.get("viewer_token") != access.share_token
++            or not viewer_session_fresh()):
+         return render_template("access.html", share_token=token,
+                                next_tab=request.args.get("tab", "map"), project_name=access.project)
+     return render_project_view(access)
+@@ -1927,12 +1989,10 @@ def shared_project(token):
+ 
+ @app.get("/project/<code>")
+ def project_view(code):
+-    """Legacy URLs no longer grant access by themselves; send them through code entry."""
+-    g.allow_public_viewer_scope = True
+-    access = ProjectAccess.query.filter_by(code=code.upper()).first()
+-    if not viewer_access_active(access):
+-        abort(404)
+-    return redirect(url_for("shared_project", token=access.share_token, **request.args.to_dict()))
++    """Legacy code-only URLs. Never reveal a project's share link from its code;
++    every code (valid, expired or unknown) gets the same instruction page."""
++    flash("Open the project link your project team sent you, then enter your 4-letter code there.", "error")
++    return render_template("access.html"), 404
+ 
+ 
+ def render_project_view(access):
+@@ -3778,7 +3838,8 @@ def protected_file(filename):
+     else:
+         g.allow_public_viewer_scope = True
+         access = ProjectAccess.query.filter_by(code=viewer_code).first() if viewer_code else None
+-        if not viewer_access_active(access):
++        if (not viewer_access_active(access) or session.get("viewer_token") != access.share_token
++                or not viewer_session_fresh()):
+             abort(403)
+         flight_record = Flight.query.filter_by(filename=safe, project=access.project, company_id=access.company_id).first()
+         document_record = ProjectFile.query.filter_by(filename=safe, project=access.project, company_id=access.company_id).first()
+diff --git a/templates/access.html b/templates/access.html
+index f24fb98..4771b42 100644
+--- a/templates/access.html
++++ b/templates/access.html
+@@ -1,3 +1,3 @@
+ <!doctype html>
+ <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Project Viewer · Capture IV</title><link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}?v=20261026-a11y"></head>
+-<body class="access-page"><a class="skip-link" href="#main-content">Skip to main content</a><header class="access-top"><a class="skybrand" href="/"><span class="sky-icon">△</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></a><a href="{{ url_for('login') }}" class="access-login">Project Admin <span>♙</span></a></header><main id="main-content" class="access-content"><section class="access-card"><p class="eyebrow">PROJECT VIEWER</p><h1>Welcome to your<br>project site.</h1><p class="access-intro">{% if project_name %}Enter the 4-letter code shared with you to access {{ project_name }}.{% else %}Enter the 4-letter project access code<br>to view site footage and updates.{% endif %}</p>{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="access-error">{{ message }}</div>{% endfor %}{% endwith %}<form method="post" class="access-form"{% if share_token %} action="{{ url_for('shared_project',token=share_token) }}"{% endif %}><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="next_tab" value="{{ next_tab or 'map' }}"><label class="sr-only" for="access-code">Four-letter project access code</label><input class="code-entry" id="access-code" name="code" maxlength="4" minlength="4" autocomplete="one-time-code" placeholder="A  B  C  D" autocapitalize="characters" required><button class="access-submit">Access Project <span>→</span></button></form><div class="or-rule"><span>or</span></div><a class="project-info-link" href="{{ url_for('login') }}">♧ &nbsp; Project team sign in</a></section><div class="access-caption">Real Context.<br>Better Decisions.<i></i></div></main><footer class="access-footer"><div><strong>CAPTURE IV</strong><span>Intelligence Visuals</span></div><div><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/privacy">Privacy</a><b></b><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/terms">Terms</a><b></b><a href="mailto:support@captureiv.com">Support</a></div></footer></body></html>
++<body class="access-page"><a class="skip-link" href="#main-content">Skip to main content</a><header class="access-top"><a class="skybrand" href="/"><span class="sky-icon">△</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></a><a href="{{ url_for('login') }}" class="access-login">Project Admin <span>♙</span></a></header><main id="main-content" class="access-content"><section class="access-card"><p class="eyebrow">PROJECT VIEWER</p><h1>Welcome to your<br>project site.</h1><p class="access-intro">{% if project_name %}Enter the 4-letter code shared with you to access {{ project_name }}.{% else %}Open the project link your project team sent you,<br>then enter your 4-letter code there.{% endif %}</p>{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="access-error">{{ message }}</div>{% endfor %}{% endwith %}{% if share_token and not link_locked %}<form method="post" class="access-form" action="{{ url_for('shared_project',token=share_token) }}"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><input type="hidden" name="next_tab" value="{{ next_tab or 'map' }}"><label class="sr-only" for="access-code">Four-letter project access code</label><input class="code-entry" id="access-code" name="code" maxlength="4" minlength="4" autocomplete="one-time-code" placeholder="A  B  C  D" autocapitalize="characters" required><button class="access-submit">Access Project <span>→</span></button></form>{% endif %}<div class="or-rule"><span>or</span></div><a class="project-info-link" href="{{ url_for('login') }}">♧ &nbsp; Project team sign in</a></section><div class="access-caption">Real Context.<br>Better Decisions.<i></i></div></main><footer class="access-footer"><div><strong>CAPTURE IV</strong><span>Intelligence Visuals</span></div><div><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/privacy">Privacy</a><b></b><a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/terms">Terms</a><b></b><a href="mailto:support@captureiv.com">Support</a></div></footer></body></html>
+diff --git a/tests/test_saas_isolation.py b/tests/test_saas_isolation.py
+index a37c176..5ebf827 100644
+--- a/tests/test_saas_isolation.py
++++ b/tests/test_saas_isolation.py
+@@ -17,6 +17,16 @@ from werkzeug.datastructures import FileStorage, MultiDict
+ import app as portal
+ 
+ 
++def unlock_viewer_state(state, code):
++    """Place a current viewer session (link + code + time) as the share page would."""
++    with portal.app.app_context():
++        access = portal.ProjectAccess.query.filter_by(code=code).first()
++        token = access.share_token if access else None
++    state["viewer_code"] = code
++    state["viewer_token"] = token
++    state["viewer_granted_at"] = int(portal.now_utc().timestamp())
++
++
+ class FakeMultipartStorage:
+     def __init__(self):
+         self.multipart = {}
+@@ -432,9 +442,10 @@ class TenantIsolationTests(unittest.TestCase):
+             access = portal.ProjectAccess.query.filter_by(code="BBBB").one()
+             token = access.share_token
+         legacy = client.get("/project/BBBB?tab=media")
+-        self.assertEqual(legacy.status_code, 302)
+-        self.assertIn(f"/share/{token}", legacy.headers["Location"])
+-        challenge = client.get(legacy.headers["Location"])
++        self.assertEqual(legacy.status_code, 404)
++        self.assertNotIn("Location", legacy.headers)
++        self.assertNotIn(token.encode(), legacy.data)
++        challenge = client.get(f"/share/{token}?tab=media")
+         self.assertEqual(challenge.status_code, 200)
+         self.assertIn(b"4-letter code", challenge.data)
+         self.assertNotIn(b"B  B  B  B", challenge.data)
+@@ -472,7 +483,7 @@ class TenantIsolationTests(unittest.TestCase):
+             self.assertEqual(access.expires_at.date().isoformat(), expiration)
+             self.assertTrue(access.allow_media)
+         legacy = client.get(f"/project/{access_code}")
+-        self.assertEqual(legacy.status_code, 302)
++        self.assertEqual(legacy.status_code, 404)
+         with portal.app.app_context():
+             token = portal.ProjectAccess.query.filter_by(id=access_id).one().share_token
+         challenge = client.get(f"/share/{token}")
+@@ -558,7 +569,7 @@ class TenantIsolationTests(unittest.TestCase):
+             portal.db.session.add(flight); portal.db.session.commit()
+         client = portal.app.test_client()
+         with client.session_transaction() as state:
+-            state["viewer_code"] = "BBBB"
++            unlock_viewer_state(state, "BBBB")
+         class FakeStorage:
+             def signed_download(self, key, filename, content_type, download, expires=300):
+                 self.args = (key, filename, content_type, download, expires)
+@@ -575,7 +586,7 @@ class TenantIsolationTests(unittest.TestCase):
+     def test_public_cannot_access_other_tenant_r2_file_even_when_key_is_known(self):
+         client = portal.app.test_client()
+         with client.session_transaction() as state:
+-            state["viewer_code"] = "BBBB"
++            unlock_viewer_state(state, "BBBB")
+         with patch.object(portal, "R2Storage") as storage:
+             response = client.get("/files/r2__companies/1/not-shared.mp4")
+         self.assertEqual(response.status_code, 403)
+@@ -670,7 +681,7 @@ class TenantIsolationTests(unittest.TestCase):
+ 
+         foreign_viewer = portal.app.test_client()
+         with foreign_viewer.session_transaction() as state:
+-            state["viewer_code"] = "BBBB"
++            unlock_viewer_state(state, "BBBB")
+         self.assertEqual(foreign_viewer.get("/files/pinned-photo-one.jpg").status_code, 403)
+ 
+         with portal.app.app_context():
+@@ -725,12 +736,12 @@ class TenantIsolationTests(unittest.TestCase):
+             self.assertGreater(access.expires_at, portal.now_utc() + portal.timedelta(days=6))
+             self.assertEqual(membership.role, "company_admin")
+             self.assertEqual(membership.status, "pending")
+-            code, company_id = access.code, company.id
++            code, company_id, demo_token = access.code, company.id, access.share_token
+ 
+         visitor = portal.app.test_client()
+-        landing = visitor.get("/")
++        landing = visitor.get(f"/share/{demo_token}")
+         visitor_csrf = re.search(rb'name="_csrf" value="([^\"]+)"', landing.data).group(1).decode()
+-        unlocked = visitor.post("/", data={"_csrf": visitor_csrf, "code": code})
++        unlocked = visitor.post(f"/share/{demo_token}", data={"_csrf": visitor_csrf, "code": code, "next_tab": "media"})
+         self.assertEqual(unlocked.status_code, 302)
+         viewer_page = visitor.get(unlocked.headers["Location"])
+         self.assertEqual(viewer_page.status_code, 200)
+diff --git a/tests/test_viewer_security.py b/tests/test_viewer_security.py
+new file mode 100644
+index 0000000..5cd021a
+--- /dev/null
++++ b/tests/test_viewer_security.py
+@@ -0,0 +1,146 @@
++import os
++os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
++os.environ.setdefault("SECRET_KEY", "test-only-secret")
++
++import re
++import unittest
++from datetime import date
++from pathlib import Path
++
++import app as portal
++
++
++def csrf_from(response):
++    return re.search(rb'name="_csrf" value="([^"]+)"', response.data).group(1).decode()
++
++
++class ViewerSecurityTests(unittest.TestCase):
++    """Client viewer access: share link + code, per-link lockout, timed sessions, headers."""
++
++    @classmethod
++    def setUpClass(cls):
++        portal.app.config.update(TESTING=True)
++        with portal.app.app_context():
++            portal.db.create_all()
++            company = portal.Company(name="Viewer Security Co", status="active", storage_limit_bytes=10_000)
++            uploader = portal.User(username="viewer-security-admin", name="VS", is_admin=True, active=True)
++            uploader.set_password("viewer-security-password")
++            portal.db.session.add_all([company, uploader]); portal.db.session.flush()
++            access = portal.ProjectAccess(project="Viewer Security Site", code="VSEC", company_id=company.id,
++                                          allow_media=True)
++            portal.db.session.add(access); portal.db.session.flush()
++            portal.db.session.add(portal.Flight(
++                company_id=company.id, flight_id="VS-FLIGHT", date=date(2026, 11, 3), direction="W-E", title="Viewer security flight",
++                filename="viewer-security-flight.mp4", original_filename="flight.mp4",
++                uploaded_by=uploader.id, project="Viewer Security Site"))
++            portal.db.session.commit()
++            cls.token, cls.code = access.share_token, access.code
++        cls.doc_path = Path(portal.UPLOAD_DIR) / "viewer-security-flight.mp4"
++        cls.doc_path.write_bytes(b"\x00\x00\x00\x18ftypmp42 viewer-security")
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.doc_path.unlink(missing_ok=True)
++
++    def setUp(self):
++        self._clear_rate_limits()
++
++    def tearDown(self):
++        self._clear_rate_limits()
++
++    @staticmethod
++    def _clear_rate_limits():
++        with portal.app.app_context():
++            portal.RateLimitEvent.query.delete(synchronize_session=False)
++            portal.db.session.commit()
++
++    def _unlock(self, client):
++        page = client.get(f"/share/{self.token}")
++        return client.post(f"/share/{self.token}", data={"_csrf": csrf_from(page), "code": self.code,
++                                                         "next_tab": "media"})
++
++    def test_code_alone_on_home_page_does_not_open_a_project(self):
++        client = portal.app.test_client()
++        landing = client.get("/")
++        self.assertIn(b"Open the project link", landing.data)
++        self.assertNotIn(b'name="code"', landing.data)
++        response = client.post("/", data={"_csrf": csrf_from(client.get("/login")), "code": self.code})
++        self.assertEqual(response.status_code, 200)
++        self.assertNotIn("Location", response.headers)
++        self.assertNotIn(self.token.encode(), response.data)
++        with client.session_transaction() as state:
++            self.assertNotIn("viewer_code", state)
++        self.assertNotEqual(client.get("/files/viewer-security-flight.mp4").status_code, 200)
++
++    def test_legacy_code_url_never_reveals_the_share_link(self):
++        client = portal.app.test_client()
++        for code in (self.code, "ZZZZ"):
++            response = client.get(f"/project/{code}")
++            self.assertEqual(response.status_code, 404)
++            self.assertNotIn("Location", response.headers)
++            self.assertNotIn(self.token.encode(), response.data)
++
++    def test_share_link_plus_code_unlocks_viewer_and_files(self):
++        client = portal.app.test_client()
++        unlocked = self._unlock(client)
++        self.assertEqual(unlocked.status_code, 302)
++        self.assertEqual(client.get(f"/share/{self.token}?tab=media").status_code, 200)
++        download = client.get("/files/viewer-security-flight.mp4")
++        self.assertEqual(download.status_code, 200)
++        download.close()
++
++    def test_link_locks_for_everyone_after_repeated_wrong_codes(self):
++        attackers = [portal.app.test_client() for _ in range(portal.VIEWER_LINK_FAILURE_LIMIT)]
++        for index, attacker in enumerate(attackers):
++            page = attacker.get(f"/share/{self.token}")
++            attacker.post(f"/share/{self.token}", data={"_csrf": csrf_from(page), "code": "QQQQ"},
++                          environ_base={"REMOTE_ADDR": f"203.0.113.{index + 1}"})
++        legitimate = portal.app.test_client()
++        page = legitimate.get(f"/share/{self.token}")
++        locked = legitimate.post(f"/share/{self.token}", data={"_csrf": csrf_from(page), "code": self.code},
++                                 environ_base={"REMOTE_ADDR": "198.51.100.7"})
++        self.assertEqual(locked.status_code, 429)
++        self.assertIn(b"temporarily locked", locked.data)
++        with legitimate.session_transaction() as state:
++            self.assertNotIn("viewer_code", state)
++
++    def test_wrong_codes_below_the_limit_do_not_lock_the_link(self):
++        client = portal.app.test_client()
++        for _ in range(portal.VIEWER_LINK_FAILURE_LIMIT - 1):
++            page = client.get(f"/share/{self.token}")
++            client.post(f"/share/{self.token}", data={"_csrf": csrf_from(page), "code": "QQQQ"})
++        self.assertEqual(self._unlock(client).status_code, 302)
++
++    def test_viewer_session_expires_and_code_is_asked_again(self):
++        client = portal.app.test_client()
++        self.assertEqual(self._unlock(client).status_code, 302)
++        with client.session_transaction() as state:
++            state["viewer_granted_at"] = int(portal.now_utc().timestamp()
++                                             - portal.VIEWER_SESSION_MAX_AGE.total_seconds() - 60)
++        page = client.get(f"/share/{self.token}?tab=media")
++        self.assertEqual(page.status_code, 200)
++        self.assertIn(b'name="code"', page.data)
++        self.assertEqual(client.get("/files/viewer-security-flight.mp4").status_code, 403)
++
++    def test_viewer_session_without_link_token_cannot_download(self):
++        client = portal.app.test_client()
++        with client.session_transaction() as state:
++            state["viewer_code"] = self.code
++            state["viewer_granted_at"] = int(portal.now_utc().timestamp())
++        self.assertEqual(client.get("/files/viewer-security-flight.mp4").status_code, 403)
++
++    def test_security_headers(self):
++        client = portal.app.test_client()
++        for path in ("/", f"/share/{self.token}", "/login"):
++            response = client.get(path)
++            self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
++            self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
++            self.assertEqual(response.headers.get("Referrer-Policy"), "strict-origin-when-cross-origin")
++        viewer = client.get(f"/share/{self.token}")
++        self.assertIn("noindex", viewer.headers.get("X-Robots-Tag", ""))
++        self.assertEqual(viewer.headers.get("Cache-Control"), "no-store")
++        self.assertNotIn("X-Robots-Tag", client.get("/login").headers)
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+

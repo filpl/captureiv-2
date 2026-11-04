@@ -1,0 +1,164 @@
+From c989afb52d576b7f239b551ee0444142627b43f3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Nov 2026 16:57:36 +0000
+Subject: [PATCH 2/2] Terms: clearly disclosed arbitration and class-action
+ waiver (draft)
+
+- Section 9 'Dispute resolution: binding arbitration and class-action
+  waiver' is an indented, bordered section with a bold heading and a
+  read-carefully notice; a key-term notice at the top of the Terms points
+  to it. Includes informal resolution first, jury waiver, class waiver,
+  small-claims and urgent-relief exceptions, a 30-day opt-out, and a
+  fallback if the waiver is unenforceable.
+- Provider and location come from LEGAL_ARBITRATION_PROVIDER and
+  LEGAL_ARBITRATION_LOCATION; marked as a draft for legal review.
+- Sign-up, employee and Enterprise consent checkboxes now name binding
+  arbitration and the class-action waiver and link to Section 9.
+- Test added for visibility and consent wording.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HbptFaAKPeT417LTNgj5bU
+---
+ app.py                          |  2 ++
+ static/legal.css                |  9 +++++++++
+ templates/employee_setup.html   |  2 +-
+ templates/enterprise_setup.html |  2 +-
+ templates/legal/_base.html      |  2 +-
+ templates/legal/terms.html      | 18 +++++++++++++++++-
+ templates/register.html         |  2 +-
+ tests/test_legal_pages.py       | 11 +++++++++++
+ 8 files changed, 43 insertions(+), 5 deletions(-)
+
+diff --git a/app.py b/app.py
+index 0c6b49a..d926e63 100644
+--- a/app.py
++++ b/app.py
+@@ -832,6 +832,8 @@ def legal_details():
+         "contact_email": os.environ.get("LEGAL_CONTACT_EMAIL", "").strip() or "support@captureiv.com",
+         "postal_address": os.environ.get("LEGAL_POSTAL_ADDRESS", "").strip(),
+         "governing_law": os.environ.get("LEGAL_GOVERNING_LAW", "").strip(),
++        "arbitration_provider": os.environ.get("LEGAL_ARBITRATION_PROVIDER", "").strip(),
++        "arbitration_location": os.environ.get("LEGAL_ARBITRATION_LOCATION", "").strip(),
+         "approved": os.environ.get("LEGAL_TERMS_APPROVED", "0").strip() == "1",
+         "terms_version": ACCOUNT_TERMS_VERSION,
+         "privacy_version": PRIVACY_NOTICE_VERSION,
+diff --git a/static/legal.css b/static/legal.css
+index 0f8ef6a..df14ac2 100644
+--- a/static/legal.css
++++ b/static/legal.css
+@@ -28,3 +28,12 @@ a { color: var(--blue); }
+ .legal-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; padding: 24px 16px 40px; font-size: 14px; }
+ .legal-foot a { color: var(--muted); }
+ @media (max-width: 600px) { .legal-table, .legal-table tbody, .legal-table tr, .legal-table td { display: block; width: 100%; } .legal-table thead { display: none; } .legal-table td { border-top: 0; } .legal-table tr { border-top: 1px solid var(--line); } }
++
++/* Key-term notice and the indented dispute-resolution section */
++.legal-key-notice { margin: 4px 0 22px; padding: 12px 16px; border-left: 4px solid var(--blue); border-radius: 0 10px 10px 0; background: #eff4ff; color: var(--ink); font-size: 15px; }
++.legal-arbitration { margin: 30px 0 8px clamp(0px, 3vw, 28px); padding: clamp(16px, 3vw, 26px); border: 2px solid var(--ink); border-radius: 14px; background: #fafbfd; }
++.legal-arbitration h2 { margin-top: 0; text-transform: uppercase; letter-spacing: .02em; font-size: 18px; }
++.legal-arbitration-lead { padding: 10px 12px; border-radius: 8px; background: #fff3d6; color: #5c4306; }
++.legal-arbitration-terms { padding-left: 24px; }
++.legal-arbitration-terms li { margin: 10px 0; padding-left: 4px; }
++.legal-arbitration-note { margin-bottom: 0; color: var(--muted); font-size: 14px; }
+diff --git a/templates/employee_setup.html b/templates/employee_setup.html
+index 10acaba..fd5dd35 100644
+--- a/templates/employee_setup.html
++++ b/templates/employee_setup.html
+@@ -1,3 +1,3 @@
+ {% extends 'base.html' %}{% block title %}Set up your Capture IV account{% endblock %}{% block content %}
+-<section class="login-card saas-card"><div class="brand large"><span class="brand-mark">C</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></div><p class="eyebrow">TEAM INVITATION</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. This invitation can only be used once.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label><button class="button primary full">Create account →</button></form></section>
++<section class="login-card saas-card"><div class="brand large"><span class="brand-mark">C</span><span>CAPTURE IV<small>Intelligence Visuals</small></span></div><p class="eyebrow">TEAM INVITATION</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. This invitation can only be used once.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms of Service</a>, including <a href="{{ legal_url('terms') }}#dispute-resolution" target="_blank" rel="noopener"><strong>binding arbitration and a class-action waiver</strong></a> (Section 9, with a 30-day opt-out), and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label><button class="button primary full">Create account →</button></form></section>
+ {% endblock %}
+diff --git a/templates/enterprise_setup.html b/templates/enterprise_setup.html
+index e1d9e0f..9980cd4 100644
+--- a/templates/enterprise_setup.html
++++ b/templates/enterprise_setup.html
+@@ -1,3 +1,3 @@
+ {% extends 'base.html' %}{% block title %}Set up Enterprise access{% endblock %}{% block content %}
+-<section class="login-card saas-card"><p class="eyebrow">ENTERPRISE ACCOUNT</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. Your workspace stays pending until the subscription payment is confirmed.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms of Service</a> and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label><button class="button primary full">Continue to secure checkout →</button></form></section>
++<section class="login-card saas-card"><p class="eyebrow">ENTERPRISE ACCOUNT</p><h1>Set up your access</h1><p class="muted">Create a password for {{ email }}. Your workspace stays pending until the subscription payment is confirmed.</p><form method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label><label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label><label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms of Service</a>, including <a href="{{ legal_url('terms') }}#dispute-resolution" target="_blank" rel="noopener"><strong>binding arbitration and a class-action waiver</strong></a> (Section 9, with a 30-day opt-out), and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label><button class="button primary full">Continue to secure checkout →</button></form></section>
+ {% endblock %}
+diff --git a/templates/legal/_base.html b/templates/legal/_base.html
+index ee42421..61f8d32 100644
+--- a/templates/legal/_base.html
++++ b/templates/legal/_base.html
+@@ -1,7 +1,7 @@
+ <!doctype html>
+ <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>{{ title or 'Legal' }} · Capture IV</title>
+-<link rel="stylesheet" href="{{ url_for('static', filename='legal.css') }}?v=1"></head>
++<link rel="stylesheet" href="{{ url_for('static', filename='legal.css') }}?v=2"></head>
+ <body class="legal-page"><a class="skip-link" href="#main-content">Skip to main content</a>
+ <header class="legal-top"><a class="legal-brand" href="{{ url_for('index') }}">Capture <span>IV</span></a>
+ <nav aria-label="Legal pages">{% for key, name in legal.pages.items() %}<a href="{{ legal_url(key) }}"{% if slug == key %} aria-current="page"{% endif %}>{{ name.split(' ')[0] if key != 'billing' else 'Billing' }}</a>{% endfor %}</nav></header>
+diff --git a/templates/legal/terms.html b/templates/legal/terms.html
+index 947cf9c..e554cc9 100644
+--- a/templates/legal/terms.html
++++ b/templates/legal/terms.html
+@@ -1,5 +1,6 @@
+ {% extends "legal/_base.html" %}
+ {% block body %}
++<aside class="legal-key-notice" role="note"><strong>Please read Section 9, “Dispute resolution: binding arbitration and class-action waiver.”</strong> It means most disputes are decided by an arbitrator instead of a judge or jury, and that claims are brought individually, not as a class action. You can opt out within 30 days of accepting these Terms.</aside>
+ <p>These Terms of Service ("Terms") govern use of Capture IV, a platform operated by {{ legal.entity }} ("we", "us") for storing, organizing, displaying and sharing construction-project media such as drone footage, site photos, maps, flight paths and project documents. By creating an account, accepting an invitation, or opening a shared project, you agree to these Terms.</p>
+ 
+ <h2>1. Accounts and roles</h2>
+@@ -40,6 +41,21 @@
+ <h2>8. Changes to these Terms</h2>
+ <p>We may update these Terms. We will show the new version on this page and, for material changes, notify company administrators by email or in the app. Continued use after a change takes effect means you accept the updated Terms.</p>
+ 
+-<h2>9. Governing law</h2>
++<section class="legal-arbitration" id="dispute-resolution" aria-labelledby="dispute-resolution-title">
++<h2 id="dispute-resolution-title">9. Dispute resolution: binding arbitration and class-action waiver</h2>
++<p class="legal-arbitration-lead"><strong>Please read this section carefully. It affects how disputes are resolved and limits your right to go to court.</strong></p>
++<ol class="legal-arbitration-terms">
++<li><strong>Talk to us first.</strong> Before starting any claim, contact us at <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a> with a description of the dispute. Both sides will try in good faith to resolve it within 60 days.</li>
++<li><strong>Binding arbitration.</strong> If it is not resolved, you and {{ legal.entity }} agree that any dispute arising out of or relating to these Terms or the service will be decided by binding individual arbitration, not in court, administered by {% if legal.arbitration_provider %}{{ legal.arbitration_provider }}{% else %}<em>[arbitration provider to be confirmed]</em>{% endif %} under its applicable rules{% if legal.arbitration_location %}, in {{ legal.arbitration_location }}{% endif %}.</li>
++<li><strong>No jury trial.</strong> You and {{ legal.entity }} each waive the right to a trial by jury.</li>
++<li><strong>Class-action waiver.</strong> Claims may be brought only on an individual basis, not as a plaintiff or class member in any class, collective or representative proceeding. The arbitrator may not combine claims of different customers.</li>
++<li><strong>Exceptions.</strong> Either side may bring an individual claim in small-claims court if it qualifies, and either side may ask a court for urgent relief to stop infringement of intellectual property or unauthorized access to accounts or data.</li>
++<li><strong>30-day opt-out.</strong> You can opt out of this section by emailing <a href="mailto:{{ legal.contact_email }}">{{ legal.contact_email }}</a> within 30 days of first accepting these Terms, with your name, company and a statement that you opt out of arbitration. Opting out does not affect any other part of these Terms.</li>
++<li><strong>If part of this section is invalid.</strong> If the class-action waiver is found unenforceable for a claim, that claim will proceed in court and not in arbitration.</li>
++</ol>
++<p class="legal-arbitration-note"><em>Draft clause: the arbitration provider, location, rules, fees and carve-outs are to be confirmed in legal review.</em></p>
++</section>
++
++<h2>10. Governing law</h2>
+ <p>{% if legal.governing_law %}These Terms are governed by the laws of {{ legal.governing_law }}.{% else %}<em>Governing law and venue are to be confirmed by the Platform Owner.</em>{% endif %}</p>
+ {% endblock %}
+diff --git a/templates/register.html b/templates/register.html
+index 1ac8bb0..d3faec3 100644
+--- a/templates/register.html
++++ b/templates/register.html
+@@ -17,7 +17,7 @@
+     </fieldset>
+     <label>Password<input type="password" name="password" autocomplete="new-password" minlength="12" required></label>
+     <label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="12" required></label>
+-    <label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms</a> and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
++    <label class="checkout-accept"><input type="checkbox" name="accept_policies" value="yes" required><span>I agree to the <a href="{{ legal_url('terms') }}" target="_blank" rel="noopener">Terms of Service</a>, including <a href="{{ legal_url('terms') }}#dispute-resolution" target="_blank" rel="noopener"><strong>binding arbitration and a class-action waiver</strong></a> (Section 9, with a 30-day opt-out), and acknowledge the <a href="{{ legal_url('privacy') }}" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
+     <button class="button primary full" {% if not plans %}disabled{% endif %}>Create pending account <span>→</span></button>
+   </form>
+   <p class="fineprint">Basic includes one active project, two authenticated company accounts, and 1 TB total storage. No storage add-ons are offered. Only company, work email, and account credentials are required. Name fields are optional. <a href="{{ config.get('MARKETING_SITE_URL', 'https://captureiv.com').rstrip('/') }}/">Back to Capture IV</a></p>
+diff --git a/tests/test_legal_pages.py b/tests/test_legal_pages.py
+index 287bd90..2720de4 100644
+--- a/tests/test_legal_pages.py
++++ b/tests/test_legal_pages.py
+@@ -53,6 +53,17 @@ class LegalPagesTests(unittest.TestCase):
+             self.assertIn(b"Example Operator LLC", page)
+             self.assertIn(b"the State of Example", page)
+ 
++    def test_terms_show_the_arbitration_section_clearly_and_signup_names_it(self):
++        client = portal.app.test_client()
++        terms = client.get("/legal/terms").get_data(as_text=True)
++        self.assertIn('id="dispute-resolution"', terms)
++        self.assertIn("binding arbitration and class-action waiver", terms)
++        self.assertIn("30-day opt-out", terms)
++        self.assertLess(terms.index("Please read Section 9"), terms.index("1. Accounts and roles"))
++        signup = client.get("/register").get_data(as_text=True)
++        self.assertIn("binding arbitration and a class-action waiver", signup)
++        self.assertIn("/legal/terms#dispute-resolution", signup)
++
+     def test_signup_checkout_and_viewer_links_point_to_app_legal_pages(self):
+         client = portal.app.test_client()
+         for path in ("/register", "/"):
+-- 
+2.43.0
+

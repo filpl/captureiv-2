@@ -1,0 +1,42 @@
+From 6b2a8166c909afefbad20f9418471319b33511f3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Nov 2026 20:26:14 +0000
+Subject: [PATCH 8/8] Load the logo stylesheet on Site capture and Sandbox
+ pages
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HbptFaAKPeT417LTNgj5bU
+---
+ templates/fieldview_sandbox.html | 2 +-
+ templates/site_capture.html      | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/templates/fieldview_sandbox.html b/templates/fieldview_sandbox.html
+index 2cfc18c..1b5c854 100644
+--- a/templates/fieldview_sandbox.html
++++ b/templates/fieldview_sandbox.html
+@@ -9,7 +9,7 @@
+   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+   <link rel="stylesheet" href="/static/fieldview-sandbox/style.css?v=privacy-fonts-7">
+ <link rel="stylesheet" href="{{ url_for('static', filename='navigation.css') }}?v=20261025-privacy">
+-</head>
++<link rel="stylesheet" href="{{ url_for('static', filename='brand-logo.css') }}?v=1"></head>
+ <body>
+   <a class="skip-link" href="#main-content">Skip to main content</a>
+   {% include "_topbar.html" %}
+diff --git a/templates/site_capture.html b/templates/site_capture.html
+index 6dc9741..91d67ed 100644
+--- a/templates/site_capture.html
++++ b/templates/site_capture.html
+@@ -3,7 +3,7 @@
+ <link rel="stylesheet" href="{{ url_for('static',filename='site-capture.css') }}?v=11">
+ <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+ <link rel="stylesheet" href="{{ url_for('static', filename='navigation.css') }}?v=20261025-privacy">
+-</head><body data-initial-view="{{ initial_view }}" data-r2-multipart="{{ 'true' if r2_multipart_enabled else 'false' }}">
++<link rel="stylesheet" href="{{ url_for('static', filename='brand-logo.css') }}?v=1"></head><body data-initial-view="{{ initial_view }}" data-r2-multipart="{{ 'true' if r2_multipart_enabled else 'false' }}">
+ <a class="skip-link" href="#main-content">Skip to main content</a>
+ {% include "_topbar.html" %}
+ {% include "_upload_rights.html" %}
+-- 
+2.43.0
+
